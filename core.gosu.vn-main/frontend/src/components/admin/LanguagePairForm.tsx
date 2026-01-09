@@ -152,7 +152,7 @@ export default function LanguagePairForm({
   // Reset target language when source changes
   useEffect(() => {
     if (!pair && sourceLanguageId && targetLanguageId) {
-      const targets = availableTargets?.data && Array.isArray(availableTargets.data) ? availableTargets.data : [];
+      const targets = Array.isArray(availableTargets?.data) ? availableTargets.data : [];
       const isAvailable = targets.some(
         (lang: Language) => lang.id === parseInt(targetLanguageId)
       );
