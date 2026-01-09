@@ -1,2 +1,0 @@
-# GOSU Core Platform Backend
-
