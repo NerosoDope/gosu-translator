@@ -5,7 +5,7 @@ from .service import JobService
 from .schemas import JobCreate, JobUpdate, JobResponse
 from typing import List
 
-router = APIRouter(prefix="/jobs", tags=["Jobs"])
+router = APIRouter(tags=["Jobs"])
 
 @router.get("/", response_model=List[JobResponse])
 async def list_jobs(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):

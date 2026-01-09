@@ -6,7 +6,7 @@
 
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL ='http://192.168.90.175:8000';
 
 const apiClient = axios.create({
   baseURL: `${API_URL}/api/v1`,
@@ -350,20 +350,20 @@ export const settingsAPI = {
 
 // Jobs API
 export const jobsAPI = {
-  getList: (params?: any) => apiClient.get(`/jobs`, { params }),
+  getList: (params?: any) => apiClient.get(`/jobs/`, { params }),
   get: (id: number) => apiClient.get(`/jobs/${id}`),
-  create: (data: any) => apiClient.post(`/jobs`, data),
-  update: (id: number, data: any) => apiClient.put(`/jobs/${id}`, data),
+  create: (data: any) => apiClient.post(`/jobs/`, data),
+  update: (id: number, data: any) => apiClient.put(`/jobs/${id}/`, data),
   delete: (id: number) => apiClient.delete(`/jobs/${id}`),
 };
 
 // Cache API
 export const cacheAPI = {
-  getList: (params?: any) => apiClient.get(`/cache`, { params }),
-  get: (id: number) => apiClient.get(`/cache/${id}`),
-  create: (data: any) => apiClient.post(`/cache`, data),
-  update: (id: number, data: any) => apiClient.put(`/cache/${id}`, data),
-  delete: (id: number) => apiClient.delete(`/cache/${id}`),
+  getList: (params?: any) => apiClient.get(`/cache/`, { params }),
+  get: (id: number) => apiClient.get(`/cache/${id}/`),
+  create: (data: any) => apiClient.post(`/cache/`, data),
+  update: (id: number, data: any) => apiClient.put(`/cache/${id}/`, data),
+  delete: (id: number) => apiClient.delete(`/cache/${id}/`),
 };
 
 // Dictionary API

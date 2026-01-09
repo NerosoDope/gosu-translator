@@ -5,7 +5,7 @@ from .service import GameCategoryService
 from .schemas import GameCategoryCreate, GameCategoryUpdate, GameCategoryResponse
 from typing import List
 
-router = APIRouter(prefix="/game-category", tags=["GameCategory"])
+router = APIRouter(tags=["GameCategory"])
 
 @router.get("/", response_model=List[GameCategoryResponse])
 async def list_game_categories(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):

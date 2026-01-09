@@ -69,7 +69,10 @@ app = FastAPI(
 # Cho phép frontend gọi API từ các origins được cấu hình
 cors_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 if settings.DEBUG:
-    cors_origins = ["*"] if not cors_origins else cors_origins
+    cors_origins = [        
+        "http://localhost:3000",
+        "http://192.168.90.175:3000",
+        ] if not cors_origins else cors_origins
 
 app.add_middleware(
     CORSMiddleware,

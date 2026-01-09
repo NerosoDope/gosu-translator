@@ -5,7 +5,7 @@ from .service import GameGlossaryService
 from .schemas import GameGlossaryCreate, GameGlossaryUpdate, GameGlossaryResponse
 from typing import List
 
-router = APIRouter(prefix="/game-glossary", tags=["GameGlossary"])
+router = APIRouter(tags=["GameGlossary"])
 
 @router.get("/", response_model=List[GameGlossaryResponse])
 async def list_game_glossary(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):

@@ -5,7 +5,7 @@ from .service import DictionaryService
 from .schemas import DictionaryCreate, DictionaryUpdate, DictionaryResponse
 from typing import List
 
-router = APIRouter(prefix="/dictionary", tags=["Dictionary"])
+router = APIRouter(tags=["Dictionary"])
 
 @router.get("/", response_model=List[DictionaryResponse])
 async def list_dictionary(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):
