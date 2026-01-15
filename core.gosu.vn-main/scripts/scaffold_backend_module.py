@@ -321,7 +321,7 @@ __all__ = ["router"]
     if with_model:
         (module_dir / "models.py").write_text(models_content,encoding='utf-8')
     
-    print(f"✅ Module '{module_name}' created successfully!")
+    print(f"[SUCCESS] Module '{module_name}' created successfully!")
     print(f"📁 Location: {module_dir}")
     print(f"\n📝 Next steps:")
     print(f"1. Update models.py (if created) with your fields")

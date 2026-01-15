@@ -18,6 +18,14 @@ from app.modules.rbac.models import Role, Permission, UserRole, Organization
 from app.modules.users.models import User
 from app.modules.audit.models import AuditLog
 from app.modules.settings.models import Setting
+from app.modules.job.models import Job
+from app.modules.cache.models import Cache
+from app.modules.game_category.models import GameCategory
+from app.modules.game_glossary.models import GameGlossary
+from app.modules.language.models import Language
+from app.modules.dictionary.models import Dictionary
+from app.modules.prompts.models import Prompt
+from app.modules.glossary_entries.models import Glossary_Entries
 # this is the Alembic Config object
 config = context.config
 
@@ -37,7 +45,7 @@ def run_migrations_offline() -> None:
     database_url = database_url.replace("postgresql+psycopg2://", "postgresql://")
     
     parsed = urlparse(database_url)
-    encoded_password = quote_plus(parsed.password or '')
+    encoded_password = parsed.password or ''
     # Use localhost when running migrations outside Docker (hostname 'postgres' won't resolve)
     hostname = parsed.hostname or "localhost"
     # Only convert 'postgres' to 'localhost' when running outside Docker container
@@ -69,7 +77,7 @@ def run_migrations_online() -> None:
     
     parsed = urlparse(database_url)
     # Password from urlparse is already decoded, re-encode it properly
-    encoded_password = quote_plus(parsed.password or '')
+    encoded_password = parsed.password or ''
     # Use localhost when running migrations outside Docker (hostname 'postgres' won't resolve)
     hostname = parsed.hostname or "localhost"
     # Only convert 'postgres' to 'localhost' when running outside Docker container

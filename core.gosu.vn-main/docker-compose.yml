@@ -130,7 +130,7 @@ services:
     env_file:
       - ./deploy/.env
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:http://192.168.90.175:8000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:http://localhost:8000}  #192.168.90.175
       WATCHPACK_POLLING: "true"
     ports:
       - "3000:3000"

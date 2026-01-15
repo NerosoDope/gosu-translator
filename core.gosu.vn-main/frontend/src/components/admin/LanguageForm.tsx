@@ -219,7 +219,7 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
   // Hooks
   const createLanguage = useCreateLanguage();
   const updateLanguage = useUpdateLanguage();
-  const { data: existingLanguages } = useLanguageList();
+  const { data: existingLanguages } = useLanguageList({ is_active: true });
   const toast = useToastContext();
 
   // Vietnamese display names (properly capitalized) for common languages
