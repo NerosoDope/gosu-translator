@@ -186,16 +186,21 @@ export default function GameCategoryForm({ category, onSuccess, onCancel }: Game
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
             Phong cách dịch
           </label>
-          <input
-            type="text"
+          <select
             value={translationStyle}
             onChange={e => setTranslationStyle(e.target.value)}
             className="w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100"
-            placeholder="Phong cách dịch mong muốn cho danh mục này (vd: Funny, Serious, Literal)"
-            maxLength={50}
-          />
+          >
+            <option value="">Chọn phong cách dịch</option>
+            <option value="Tự nhiên, mượt mà">Tự nhiên, mượt mà</option>
+            <option value="Sát nghĩa, giữ cấu trúc">Sát nghĩa, giữ cấu trúc</option>
+            <option value="Văn phong trang trọng">Văn phong trang trọng</option>
+            <option value="Văn phong thân mật">Văn phong thân mật</option>
+            <option value="Ngắn gọn, súc tích">Ngắn gọn, súc tích</option>
+            <option value="Đầy đủ, chi tiết">Đầy đủ, chi tiết</option>
+          </select>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            (Tùy chọn) Mô tả phong cách dịch ưu tiên cho các nội dung thuộc danh mục này.
+            (Tùy chọn) Chọn phong cách dịch ưu tiên cho các nội dung thuộc danh mục này.
           </p>
         </div>
 
