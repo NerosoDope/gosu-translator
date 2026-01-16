@@ -139,8 +139,8 @@ const AppSidebar: React.FC = () => {
     const items: NavItem[] = [];
 
       items.push({
-        name: "Quản Lý Jobs",
-        path: "/jobs",
+      name: "Quản Lý Jobs",
+      path: "/job",
         icon: (
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
             <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>

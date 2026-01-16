@@ -5,7 +5,7 @@ from .service import CacheService
 from .schemas import CacheCreate, CacheUpdate, CacheResponse
 from typing import List
 
-router = APIRouter(prefix="/cache", tags=["Cache"])
+router = APIRouter(tags=["Cache"])
 
 @router.get("/", response_model=List[CacheResponse])
 async def list_cache(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):

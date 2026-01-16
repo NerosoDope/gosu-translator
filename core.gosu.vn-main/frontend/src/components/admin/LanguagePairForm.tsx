@@ -193,12 +193,17 @@ export default function LanguagePairForm({
   // Prepare languages list
   let languagesList: Language[] = [];
   if (languages?.data) {
-    if (Array.isArray(languages.data.items)) {
-      languagesList = languages.data.items;
-    } else if (Array.isArray(languages.data)) {
-      languagesList = languages.data;
-    }
+    const rawLanguages = Array.isArray(languages.data.items)
+      ? languages.data.items
+      : Array.isArray(languages.data)
+      ? languages.data
+      : [];
+  
+    languagesList = rawLanguages.filter(
+      (lang: Language) => lang.is_active === true
+    );
   }
+  
 
   // Prepare target options
   let targetOptions: Language[] = [];

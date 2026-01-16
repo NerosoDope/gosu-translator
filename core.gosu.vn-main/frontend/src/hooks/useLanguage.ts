@@ -51,11 +51,12 @@ interface LanguagePairListParams {
 /**
  * Hook to fetch list of languages with optional filtering
  */
-export function useLanguageList(params?: LanguageListParams) {
+export function useLanguageList(params?: LanguageListParams, enabled = true) {
   return useQuery(
     ['languages', 'list', params],
     () => languageAPI.getList(params),
     {
+      enabled,
       keepPreviousData: true,
       staleTime: 5 * 60 * 1000, // 5 minutes
       retry: 2,

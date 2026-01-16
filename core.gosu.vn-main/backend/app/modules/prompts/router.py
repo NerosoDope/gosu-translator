@@ -5,7 +5,7 @@ from .service import PromptsService
 from .schemas import PromptCreate, PromptUpdate, PromptResponse
 from typing import List
 
-router = APIRouter(prefix="/prompts", tags=["Prompts"])
+router = APIRouter(tags=["Prompts"])
 
 @router.get("/", response_model=List[PromptResponse])
 async def list_prompts(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):

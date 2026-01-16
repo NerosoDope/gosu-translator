@@ -3,10 +3,11 @@
  * 
  * Axios client được cấu hình sẵn để gọi API backend.
  */
-
+//192.168.90.175
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Default to localhost; adjust to your backend host as needed.
+const API_URL = 'http://localhost:8000';
 
 const apiClient = axios.create({
   baseURL: `${API_URL}/api/v1`,
@@ -348,22 +349,13 @@ export const settingsAPI = {
   deleteSetting: (settingId: number) => apiClient.delete(`/settings/${settingId}`),
 };
 
-// Jobs API
-export const jobsAPI = {
-  getList: (params?: any) => apiClient.get(`/jobs`, { params }),
-  get: (id: number) => apiClient.get(`/jobs/${id}`),
-  create: (data: any) => apiClient.post(`/jobs`, data),
-  update: (id: number, data: any) => apiClient.put(`/jobs/${id}`, data),
-  delete: (id: number) => apiClient.delete(`/jobs/${id}`),
-};
-
 // Cache API
 export const cacheAPI = {
-  getList: (params?: any) => apiClient.get(`/cache`, { params }),
-  get: (id: number) => apiClient.get(`/cache/${id}`),
-  create: (data: any) => apiClient.post(`/cache`, data),
-  update: (id: number, data: any) => apiClient.put(`/cache/${id}`, data),
-  delete: (id: number) => apiClient.delete(`/cache/${id}`),
+  getList: (params?: any) => apiClient.get(`/cache/`, { params }),
+  get: (id: number) => apiClient.get(`/cache/${id}/`),
+  create: (data: any) => apiClient.post(`/cache/`, data),
+  update: (id: number, data: any) => apiClient.put(`/cache/${id}/`, data),
+  delete: (id: number) => apiClient.delete(`/cache/${id}/`),
 };
 
 // Dictionary API
@@ -391,6 +383,7 @@ export const gameCategoryAPI = {
   create: (data: any) => apiClient.post(`/game-category`, data),
   update: (id: number, data: any) => apiClient.put(`/game-category/${id}`, data),
   delete: (id: number) => apiClient.delete(`/game-category/${id}`),
+  restore: (id: number) => apiClient.post(`/game-category/${id}/restore`),
 };
 
 // Game Glossary API
@@ -424,4 +417,22 @@ export const languageAPI = {
     apiClient.get(`/languages/${sourceLanguageId}/available-targets/`, {
       params: organizationId ? { organization_id: organizationId } : {}
     }),
+};
+
+// Job API
+export const jobAPI = {
+  getList: (params?: any) => apiClient.get(`/job`, { params }),
+  get: (id: number) => apiClient.get(`/job/${id}`),
+  create: (data: any) => apiClient.post(`/job`, data),
+  update: (id: number, data: any) => apiClient.put(`/job/${id}`, data),
+  delete: (id: number) => apiClient.delete(`/job/${id}`),
+};
+
+// Asset API
+export const assetAPI = {
+  getList: (params?: any) => apiClient.get(`/asset`, { params }),
+  get: (id: number) => apiClient.get(`/asset/${id}`),
+  create: (data: any) => apiClient.post(`/asset`, data),
+  update: (id: number, data: any) => apiClient.put(`/asset/${id}`, data),
+  delete: (id: number) => apiClient.delete(`/asset/${id}`),
 };

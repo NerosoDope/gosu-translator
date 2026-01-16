@@ -41,13 +41,15 @@ from app.modules.dashboard import router as dashboard_router
 from app.modules.audit import router as audit_router
 from app.modules.settings import router as settings_router
 
-from app.modules.jobs import router as jobs_router
 from app.modules.cache import router as cache_router
 from app.modules.dictionary import router as dictionary_router
 from app.modules.prompts import router as prompts_router
 from app.modules.game_category import router as game_category_router
 from app.modules.game_glossary import router as game_glossary_router
 from app.modules.language import router as language_router
+from app.modules.job import router as job_router
+from app.modules.glossary_entries import router as glossary_entries_router
+from app.modules.glossary_entries import router as glossary_entries_router
 
 import logging
 
@@ -69,7 +71,10 @@ app = FastAPI(
 # Cho phép frontend gọi API từ các origins được cấu hình
 cors_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 if settings.DEBUG:
-    cors_origins = ["*"] if not cors_origins else cors_origins
+    cors_origins = [        
+        "http://localhost:3000",
+        "http://192.168.90.175:3000",
+        ] if not cors_origins else cors_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -97,13 +102,15 @@ app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["dashboar
 app.include_router(settings_router, prefix="/api/v1/settings", tags=["settings"])
 app.include_router(audit_router, prefix="/api/v1/audit", tags=["audit"])
 
-app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(cache_router, prefix="/api/v1/cache", tags=["cache"])
 app.include_router(dictionary_router, prefix="/api/v1/dictionary", tags=["dictionary"])
 app.include_router(prompts_router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(game_category_router, prefix="/api/v1/game-category", tags=["game-category"])
 app.include_router(game_glossary_router, prefix="/api/v1/game-glossary", tags=["game-glossary"])
 app.include_router(language_router, prefix="/api/v1/languages", tags=["languages"])
+app.include_router(job_router, prefix="/api/v1/job", tags=["job"])
+app.include_router(glossary_entries_router, prefix="/api/v1/glossary-entries", tags=["glossary-entries"])
+app.include_router(glossary_entries_router, prefix="/api/v1/glossary-entries", tags=["glossary-entries"])
 
 
 @app.get("/")
