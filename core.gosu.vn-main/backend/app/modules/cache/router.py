@@ -24,12 +24,12 @@ async def get_cache(id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/", response_model=CacheResponse)
 async def create_cache(data: CacheCreate, db: AsyncSession = Depends(get_db)):
     service = CacheService(db)
-    return await service.create(data.dict())
+    return await service.create(data.model_dump())
 
 @router.put("/{id}", response_model=CacheResponse)
 async def update_cache(id: int, data: CacheUpdate, db: AsyncSession = Depends(get_db)):
     service = CacheService(db)
-    cache = await service.update(id, data.dict(exclude_unset=True))
+    cache = await service.update(id, data.model_dump(exclude_unset=True))
     if not cache:
         raise HTTPException(status_code=404, detail="Cache not found")
     return cache

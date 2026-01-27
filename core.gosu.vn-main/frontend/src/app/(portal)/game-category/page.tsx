@@ -3,8 +3,6 @@ import { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import GameCategoryTable from '@/components/admin/GameCategoryTable';
 import GameCategoryForm from '@/components/admin/GameCategoryForm';
-import DataTable, { Column } from '@/components/data/DataTable';
-import Pagination from '@/components/data/Pagination';
 import FilterBar from '@/components/data/FilterBar';
 import Button from '@/components/ui/Button';
 
@@ -13,10 +11,9 @@ import { gameCategoryAPI } from '@/lib/api';
 interface GameCategory {
   id: number;
   name: string;
-  is_active: boolean;
-  is_deleted?: boolean;
-  deleted_at?: string;
+  description: string;
   translation_style: string;
+  is_active: boolean;
 }
 
 interface GameCategoryListResponse {
@@ -45,7 +42,6 @@ export default function GameCategoryPage() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [showDeleted, setShowDeleted] = useState(false);
   const [sortBy, setSortBy] = useState<string>('id');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
@@ -58,7 +54,9 @@ export default function GameCategoryPage() {
       const params: any = {};
 
       const response = await gameCategoryAPI.getList(params);
-      let processedData: GameCategory[] = response.data || [];
+      const { items, total, page, per_page, pages } = response.data; // Destructure response.data
+
+      let processedData: GameCategory[] = items || [];
 
       // Client-side Filtering
       if (search) {
@@ -69,9 +67,6 @@ export default function GameCategoryPage() {
       if (statusFilter) {
         const isActive = statusFilter === 'active';
         processedData = processedData.filter(category => category.is_active === isActive);
-      }
-      if (!showDeleted) {
-        processedData = processedData.filter(category => !category.is_deleted);
       }
 
       // Client-side Sorting
@@ -94,7 +89,6 @@ export default function GameCategoryPage() {
       const endIndex = startIndex + pagination.per_page;
       const paginatedData = processedData.slice(startIndex, endIndex);
       
-      console.log('Game Category API response data:', response.data);
       setGameCategories(paginatedData);
       setPagination({
         ...pagination,
@@ -114,7 +108,7 @@ export default function GameCategoryPage() {
   // Load game categories data when relevant state changes
   useEffect(() => {
     loadGameCategories();
-  }, [pagination.page, pagination.per_page, search, statusFilter, showDeleted, sortBy, sortOrder]);
+  }, [pagination.page, pagination.per_page, search, statusFilter, sortBy, sortOrder]);
 
   // Event handlers
   const handleCategoryCreate = () => {
@@ -143,16 +137,6 @@ export default function GameCategoryPage() {
     setShowDeleteConfirm(true);
   };
 
-  const handleRestoreCategory = async (category: GameCategory) => {
-    try {
-      await gameCategoryAPI.restore(category.id);
-      loadGameCategories();
-    } catch (error: any) {
-      console.error('Error restoring game category:', error);
-      // Could show error toast here
-    }
-  };
-
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
 
@@ -175,157 +159,18 @@ export default function GameCategoryPage() {
 
   // Handle column sorting
   const handleSort = (columnKey: string | null, direction: 'asc' | 'desc' | null) => {
-    if (columnKey === null) {
-      // Clear sorting
+    if (!columnKey || !direction) {
+      // If columnKey or direction is null, reset to default sort
       setSortBy('id');
       setSortOrder('asc');
-    } else if (sortBy === columnKey) {
-      // Toggle sort order
-      if (direction === 'asc') {
-        setSortOrder('desc');
-      } else if (direction === 'desc') {
-        setSortBy('id');
-        setSortOrder('asc');
-      } else {
-        setSortOrder('asc');
-      }
     } else {
-      // Set new sort column with specified direction
+      // Set new sort column and direction
       setSortBy(columnKey);
-      setSortOrder(direction === 'desc' ? 'desc' : 'asc');
+      setSortOrder(direction);
     }
     // Reset to first page when sorting changes
     setPagination(prev => ({ ...prev, page: 1 }));
   };
-
-  // DataTable columns for game categories
-  const gameCategoryColumns: Column<GameCategory>[] = [
-    {
-      key: 'id',
-      header: 'STT',
-      sortable: false,
-      render: (category: GameCategory, index?: number) => (
-        <span className="text-sm text-gray-900 dark:text-gray-100">
-          {index !== undefined ? (pagination.page - 1) * pagination.per_page + index + 1 : '-'}
-        </span>
-      ),
-    },
-    {
-      key: 'name',
-      header: 'Tên thể loại',
-      sortable: true,
-      render: (category: GameCategory) => (
-        <span className="text-gray-900 dark:text-gray-100 font-medium">
-          {category.name}
-        </span>
-      ),
-    },
-    {
-      key: 'translation_style',
-      header: 'Phong cách dịch',
-      sortable: true,
-      render: (category: GameCategory) => (
-        <span className="text-gray-600 dark:text-gray-400">
-          {category.translation_style}
-        </span>
-      ),
-    },
-    {
-      key: 'is_active',
-      header: 'Trạng thái',
-      sortable: true,
-      render: (category: GameCategory) => (
-        <div className="flex flex-col gap-1">
-          <span
-            className={`inline-flex w-fit items-center px-2 py-1 text-xs rounded-full ${
-              category.is_active
-                ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
-                : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
-            }`}
-          >
-            {category.is_active ? 'Hoạt động' : 'Tạm dừng'}
-          </span>
-          {category.is_deleted && (
-            <span className="inline-flex w-fit items-center px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
-              Đã xóa
-            </span>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'actions',
-      header: 'Thao tác',
-      sortable: false,
-      className: 'text-right',
-      render: (category: GameCategory) => (
-        <div className="flex items-center gap-2">
-          {!category.is_deleted ? (
-            <>
-              <button
-                onClick={() => handleCategoryEdit(category)}
-                className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-                title="Chỉnh sửa"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                  />
-                </svg>
-              </button>
-              <button
-                onClick={() => handleDeleteCategory(category)}
-                className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                title="Xóa"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={() => handleRestoreCategory(category)}
-              className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
-              title="Khôi phục"
-            >
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                />
-              </svg>
-            </button>
-          )}
-        </div>
-      ),
-    },
-  ];
 
   return (
     <QueryClientProvider client={new QueryClient()}>
@@ -376,18 +221,6 @@ export default function GameCategoryPage() {
                   <option value="inactive">Tạm dừng</option>
                 </select>
 
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={showDeleted}
-                    onChange={(e) => setShowDeleted(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                  />
-                  <span className="text-sm text-gray-700 dark:text-gray-300">
-                    Hiển thị đã xóa
-                  </span>
-                </label>
-
                 <select
                   value={pagination.per_page}
                   onChange={(e) => setPagination((prev) => ({ ...prev, per_page: Number(e.target.value), page: 1 }))}
@@ -402,29 +235,19 @@ export default function GameCategoryPage() {
             }
           />
 
-          {/* Data Table */}
-          <DataTable
-            data={gameCategories}
-            columns={gameCategoryColumns}
-            isLoading={loading}
-            emptyMessage="Không tìm thấy thể loại game. Nhấn 'Thêm thể loại game' để tạo thể loại game đầu tiên."
+          {/* Game Category Table Component */}
+          <GameCategoryTable
+            items={gameCategories}
+            loading={loading}
+            error={error}
+            pagination={pagination}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onPageChange={(page) => setPagination((prev) => ({ ...prev, page }))}
             onSort={handleSort}
-            sortColumn={sortBy}
-            sortDirection={sortOrder === 'asc' ? 'asc' : sortOrder === 'desc' ? 'desc' : null}
+            onEdit={handleCategoryEdit}
+            onDelete={handleDeleteCategory}
           />
-
-          {/* Pagination */}
-          {pagination.pages > 1 && (
-            <Pagination
-              currentPage={pagination.page}
-              totalPages={pagination.pages}
-              onPageChange={(page) =>
-                setPagination((prev) => ({ ...prev, page }))
-              }
-              pageSize={pagination.per_page}
-              totalItems={pagination.total}
-            />
-          )}
 
           {/* Game Category Form Modal */}
           {showCategoryForm && (
@@ -508,5 +331,4 @@ export default function GameCategoryPage() {
       </div>
     </QueryClientProvider>
   );
-
 }

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class GameCategoryBase(BaseModel):
@@ -25,3 +25,10 @@ class GameCategoryResponse(GameCategoryBase):
 
     class Config:
         orm_mode = True
+
+class GameCategoryListResponse(BaseModel):
+    items: List[GameCategoryResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
