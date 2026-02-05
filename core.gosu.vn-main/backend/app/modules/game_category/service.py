@@ -7,7 +7,15 @@ class GameCategoryService:
         self.repo = GameCategoryRepository(db)
 
     async def list(self, skip: int = 0, limit: int = 20):
-        return await self.repo.list(skip=skip, limit=limit)
+        items = await self.repo.list(skip=skip, limit=limit)
+        total = await self.repo.count()
+        return {
+            "items": items,
+            "total": total,
+            "page": (skip // limit) + 1,
+            "per_page": limit,
+            "pages": (total + limit - 1) // limit if limit > 0 else 0
+        }
 
     async def get(self, id: int):
         return await self.repo.get(id)

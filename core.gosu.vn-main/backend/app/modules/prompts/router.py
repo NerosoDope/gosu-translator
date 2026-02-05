@@ -24,12 +24,12 @@ async def get_prompt(id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/", response_model=PromptResponse)
 async def create_prompt(data: PromptCreate, db: AsyncSession = Depends(get_db)):
     service = PromptsService(db)
-    return await service.create(data.dict())
+    return await service.create(data.model_dump())
 
 @router.put("/{id}", response_model=PromptResponse)
 async def update_prompt(id: int, data: PromptUpdate, db: AsyncSession = Depends(get_db)):
     service = PromptsService(db)
-    item = await service.update(id, data.dict(exclude_unset=True))
+    item = await service.update(id, data.model_dump(exclude_unset=True))
     if not item:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return item

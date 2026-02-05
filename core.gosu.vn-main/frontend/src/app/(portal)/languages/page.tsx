@@ -719,18 +719,6 @@ export default function LanguagesPage() {
                     <option value="inactive">Tạm dừng</option>
                   </select>
 
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={showDeleted}
-                      onChange={(e) => setShowDeleted(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-                    />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                      Hiển thị đã xóa
-                    </span>
-                  </label>
-
                   <select
                     value={pagination.per_page}
                     onChange={(e) => setPagination((prev) => ({ ...prev, per_page: Number(e.target.value), page: 1 }))}

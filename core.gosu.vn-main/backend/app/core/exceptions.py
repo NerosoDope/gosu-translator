@@ -32,6 +32,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 import uuid
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ def setup_exception_handlers(app):
                 "error": {
                     "code": "INTERNAL_SERVER_ERROR",
                     "message": "Internal server error",
-                    "details": {}
+                    "details": {"exception": str(exc)} if settings.DEBUG else {}
                 },
                 "request_id": request_id
             }

@@ -1,49 +1,232 @@
-import { useGameGlossaryList, useDeleteGameGlossary } from '@/hooks/useGameGlossary';
-import { useState } from 'react';
+import React, { useMemo } from 'react';
+import DataTable, { Column } from '@/components/data/DataTable';
+import Pagination from '@/components/data/Pagination';
 
-export default function GameGlossaryTable({ onEdit }: { onEdit: (item: any) => void }) {
-  const { data, isLoading, error } = useGameGlossaryList();
-  const deleteGameGlossary = useDeleteGameGlossary();
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+interface GameGlossaryItem {
+  id: number;
+  term: string;
+  translated_term: string;
+  language_pair: string;
+  game_id: number;
+  usage_count: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at?: string;
+}
 
-  if (isLoading) return <div>Loading...</div>;
-  if (error) return <div>Error loading game glossary</div>;
+interface Game {
+  id: number;
+  name: string;
+}
+
+interface GameGlossaryTableProps {
+  items: GameGlossaryItem[];
+  loading: boolean;
+  error: string | null;
+  pagination?: {
+    page: number;
+    per_page: number;
+    total: number;
+    pages: number;
+  };
+  games: Game[];
+  sortBy: string;
+  sortOrder: 'asc' | 'desc';
+  onPageChange: (page: number) => void;
+  onSort: (columnKey: string | null, direction: 'asc' | 'desc' | null) => void;
+  onRead?: (item: GameGlossaryItem) => void;
+  onEdit: (item: GameGlossaryItem) => void;
+  onDelete: (item: GameGlossaryItem) => void;
+
+}
+
+export default function GameGlossaryTable({
+  items,
+  loading,
+  error,
+  pagination,
+  games,
+  sortBy,
+  sortOrder,
+  onPageChange,
+  onSort,
+  onRead = () => {},
+  onEdit,
+  onDelete,
+}: GameGlossaryTableProps) {
+  // DataTable columns for game glossary
+  const columns: Column<GameGlossaryItem>[] = useMemo(() => [
+    {
+      key: 'id',
+      header: 'STT',
+      sortable: false,
+      render: (item: GameGlossaryItem, index?: number) => (
+        <span className="text-sm text-gray-900 dark:text-gray-100">
+          {index !== undefined && pagination
+            ? (pagination.page - 1) * pagination.per_page + index + 1
+            : '-'}
+
+        </span>
+      ),
+    },
+    {
+      key: 'term',
+      header: 'Thuật ngữ gốc',
+      sortable: true,
+      render: (item: GameGlossaryItem) => (
+        <span className="text-gray-900 dark:text-gray-100 font-medium">
+          {item.term}
+        </span>
+      ),
+    },
+    {
+      key: 'translated_term',
+      header: 'Thuật ngữ dịch',
+      sortable: true,
+      render: (item: GameGlossaryItem) => (
+        <span className="text-gray-600 dark:text-gray-400">
+          {item.translated_term}
+        </span>
+      ),
+    },
+    {
+      key: 'language_pair',
+      header: 'Cặp ngôn ngữ',
+      sortable: true,
+      render: (item: GameGlossaryItem) => (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
+          {item.language_pair}
+        </span>
+      ),
+    },
+    {
+      key: 'is_active',
+      header: 'Trạng thái',
+      sortable: true,
+      render: (item: GameGlossaryItem) => (
+        <div className="flex flex-col gap-1">
+          <span
+            className={`inline-flex w-fit items-center px-2 py-1 text-xs rounded-full ${item.is_active
+              ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
+              : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
+              }`}
+          >
+            {item.is_active ? 'Hoạt động' : 'Tạm dừng'}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'actions',
+      header: 'Thao tác',
+      sortable: false,
+      className: 'text-right',
+      render: (item: GameGlossaryItem) => (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onRead(item)}
+            className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 transition-colors duration-200"
+            title="Xem trước thuật ngữ"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+              />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+              />
+            </svg>
+          </button>
+          <button
+            onClick={() => onEdit(item)}
+            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors duration-200"
+            title="Chỉnh sửa"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+              />
+            </svg>
+          </button>
+          <button
+            onClick={() => onDelete(item)}
+            className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 transition-colors duration-200"
+            title="Xóa"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
+            </svg>
+          </button>
+        </div>
+      ),
+    },
+  ],
+    [
+      pagination,
+      games,
+      onRead,
+      onEdit,
+      onDelete
+    ]
+
+  );
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-theme-md">
-      <table className="w-full">
-        <thead>
-          <tr className="border-b border-gray-200 dark:border-gray-700">
-            <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">ID</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Term</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Definition</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Active</th>
-            <th className="px-4 py-3"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {data?.data?.map((item: any) => (
-            <tr key={item.id} className="border-b border-gray-200 dark:border-gray-700">
-              <td className="px-4 py-3 text-sm">{item.id}</td>
-              <td className="px-4 py-3 text-sm">{item.term}</td>
-              <td className="px-4 py-3 text-sm max-w-xs truncate">{item.definition}</td>
-              <td className="px-4 py-3 text-sm">{item.is_active ? '✔️' : ''}</td>
-              <td className="px-4 py-3 text-sm flex gap-2">
-                <button onClick={() => onEdit(item)} className="text-blue-600">Edit</button>
-                <button
-                  disabled={deletingId === item.id}
-                  onClick={async () => {
-                    setDeletingId(item.id);
-                    await deleteGameGlossary.mutateAsync(item.id);
-                    setDeletingId(null);
-                  }}
-                  className="text-red-600"
-                >Delete</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-3 rounded">
+          {error}
+        </div>
+      )}
+
+      <DataTable
+        data={items}
+        columns={columns}
+        isLoading={loading}
+        emptyMessage="Không tìm thấy thuật ngữ nào. Nhấn 'Thêm thuật ngữ' để tạo thuật ngữ đầu tiên."
+        onSort={onSort}
+        sortColumn={sortBy}
+        sortDirection={sortOrder === 'asc' ? 'asc' : sortOrder === 'desc' ? 'desc' : null}
+      />
+
+      {pagination && pagination.pages > 1 && (
+        <Pagination
+          currentPage={pagination.page}
+          totalPages={pagination.pages}
+          onPageChange={onPageChange}
+          pageSize={pagination.per_page}
+          totalItems={pagination.total}
+        />
+      )}
+    </>
   );
 }

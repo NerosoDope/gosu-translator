@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .models import GameCategory
 
 class GameCategoryRepository:
@@ -11,6 +11,11 @@ class GameCategoryRepository:
         query = select(GameCategory).offset(skip).limit(limit)
         result = await self.db.execute(query)
         return result.scalars().all()
+
+    async def count(self) -> int:
+        query = select(func.count()).select_from(GameCategory)
+        result = await self.db.execute(query)
+        return result.scalar_one()
 
     async def get(self, id: int) -> Optional[GameCategory]:
         result = await self.db.execute(select(GameCategory).where(GameCategory.id == id))

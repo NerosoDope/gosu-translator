@@ -312,15 +312,6 @@ export default function GameCategoriesPage() {
                 <option value="inactive">Tạm dừng</option>
               </select>
 
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={showDeleted}
-                  onChange={e => setShowDeleted(e.target.checked)}
-                />
-                Hiển thị đã xóa
-              </label>
-
               <select
                 value={pagination.per_page}
                 onChange={e =>

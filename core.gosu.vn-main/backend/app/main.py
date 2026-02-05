@@ -42,14 +42,13 @@ from app.modules.audit import router as audit_router
 from app.modules.settings import router as settings_router
 
 from app.modules.cache import router as cache_router
-from app.modules.dictionary import router as dictionary_router
 from app.modules.prompts import router as prompts_router
 from app.modules.game_category import router as game_category_router
 from app.modules.game_glossary import router as game_glossary_router
 from app.modules.language import router as language_router
 from app.modules.job import router as job_router
-from app.modules.glossary_entries import router as glossary_entries_router
-from app.modules.glossary_entries import router as glossary_entries_router
+from app.modules.global_glossary import router as global_glossary_router
+from app.modules.game import router as game_router
 
 import logging
 
@@ -103,14 +102,13 @@ app.include_router(settings_router, prefix="/api/v1/settings", tags=["settings"]
 app.include_router(audit_router, prefix="/api/v1/audit", tags=["audit"])
 
 app.include_router(cache_router, prefix="/api/v1/cache", tags=["cache"])
-app.include_router(dictionary_router, prefix="/api/v1/dictionary", tags=["dictionary"])
 app.include_router(prompts_router, prefix="/api/v1/prompts", tags=["prompts"])
 app.include_router(game_category_router, prefix="/api/v1/game-category", tags=["game-category"])
 app.include_router(game_glossary_router, prefix="/api/v1/game-glossary", tags=["game-glossary"])
+app.include_router(global_glossary_router, prefix="/api/v1/global-glossary", tags=["global-glossary"])
+app.include_router(game_router, prefix="/api/v1/game", tags=["game"])
 app.include_router(language_router, prefix="/api/v1/languages", tags=["languages"])
 app.include_router(job_router, prefix="/api/v1/job", tags=["job"])
-app.include_router(glossary_entries_router, prefix="/api/v1/glossary-entries", tags=["glossary-entries"])
-app.include_router(glossary_entries_router, prefix="/api/v1/glossary-entries", tags=["glossary-entries"])
 
 
 @app.get("/")

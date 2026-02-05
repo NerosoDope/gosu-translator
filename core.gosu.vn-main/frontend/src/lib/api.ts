@@ -358,15 +358,6 @@ export const cacheAPI = {
   delete: (id: number) => apiClient.delete(`/cache/${id}/`),
 };
 
-// Dictionary API
-export const dictionaryAPI = {
-  getList: (params?: any) => apiClient.get(`/dictionary`, { params }),
-  get: (id: number) => apiClient.get(`/dictionary/${id}`),
-  create: (data: any) => apiClient.post(`/dictionary`, data),
-  update: (id: number, data: any) => apiClient.put(`/dictionary/${id}`, data),
-  delete: (id: number) => apiClient.delete(`/dictionary/${id}`),
-};
-
 // Prompts API
 export const promptsAPI = {
   getList: (params?: any) => apiClient.get(`/prompts`, { params }),
@@ -435,4 +426,31 @@ export const assetAPI = {
   create: (data: any) => apiClient.post(`/asset`, data),
   update: (id: number, data: any) => apiClient.put(`/asset/${id}`, data),
   delete: (id: number) => apiClient.delete(`/asset/${id}`),
+};
+
+// Global_glossary API
+export const global_glossaryAPI = {
+  getList: (params?: any) => apiClient.get(`/global-glossary`, { params }),
+  get: (id: number) => apiClient.get(`/global-glossary/${id}`),
+  create: (data: any) => apiClient.post(`/global-glossary`, data),
+  update: (id: number, data: any) => apiClient.put(`/global-glossary/${id}`, data),
+  delete: (id: number) => apiClient.delete(`/global-glossary/${id}`),
+};
+
+// Game API
+export const gameAPI = {
+  getList: (params?: any) => apiClient.get(`/game`, { params }),
+  get: (id: number) => apiClient.get(`/game/${id}`),
+  create: (data: any) => apiClient.post(`/game`, data),
+  update: (id: number, data: any) => apiClient.put(`/game/${id}`, data),
+  delete: (id: number) => apiClient.delete(`/game/${id}`),
+};
+
+// Game_glossary API
+export const game_glossaryAPI = {
+  getList: (params?: any) => apiClient.get(`/game_glossary`, { params }),
+  get: (id: number) => apiClient.get(`/game_glossary/${id}`),
+  create: (data: any) => apiClient.post(`/game_glossary`, data),
+  update: (id: number, data: any) => apiClient.put(`/game_glossary/${id}`, data),
+  delete: (id: number) => apiClient.delete(`/game_glossary/${id}`),
 };
