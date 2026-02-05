@@ -65,6 +65,16 @@ export default function GameCategoryTable({
         ),
       },
       {
+        key: 'description',
+        header: 'Mô tả',
+        sortable: true,
+        render: (category: GameCategory) => (
+          <span className="text-gray-900 dark:text-gray-100 font-medium">
+            {category.description}
+          </span>
+        ),
+      },
+      {
         key: 'translation_style',
         header: 'Phong cách dịch',
         sortable: true,

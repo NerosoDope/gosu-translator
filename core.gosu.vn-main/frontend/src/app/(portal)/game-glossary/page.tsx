@@ -397,12 +397,7 @@ function GameGlossaryContent() {
                           <div>
                             <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Cặp ngôn ngữ</p>
                             <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                              {readingItem.language_pair === 'en-vi' ? 'EN → VI' :
-                                readingItem.language_pair === 'vi-en' ? 'VI → EN' :
-                                  readingItem.language_pair === 'ja-en' ? 'JA → EN' :
-                                    readingItem.language_pair === 'ja-vi' ? 'JA → VI' :
-                                      readingItem.language_pair === 'en-ja' ? 'EN → JA' :
-                                        readingItem.language_pair === 'vi-ja' ? 'VI → JA' : readingItem.language_pair}
+                              {readingItem.language_pair}
                             </p>
                           </div>
                         </div>
