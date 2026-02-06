@@ -21,8 +21,10 @@ from app.modules.settings.models import Setting
 from app.modules.job.models import Job
 from app.modules.cache.models import Cache
 from app.modules.game_category.models import GameCategory
-from app.modules.game_glossary.models import GameGlossary
-from app.modules.language.models import Language
+from app.modules.game_glossary.models import Game_Glossary
+from app.modules.global_glossary.models import Global_Glossary
+from app.modules.game.models import Game
+from app.modules.language.models import Language, LanguagePair
 from app.modules.prompts.models import Prompt
 # this is the Alembic Config object
 config = context.config
