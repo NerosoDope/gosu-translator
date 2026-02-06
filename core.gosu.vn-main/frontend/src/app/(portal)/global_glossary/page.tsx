@@ -78,8 +78,8 @@ function GlobalGlossaryContent() {
       statusFilter === 'active'
         ? true
         : statusFilter === 'inactive'
-        ? false
-        : undefined,
+          ? false
+          : undefined,
     language_pair: languagePairFilter || undefined,
     game_category_id: gameCategoryFilter
       ? Number(gameCategoryFilter)
@@ -195,37 +195,31 @@ function GlobalGlossaryContent() {
 
   return (
     <QueryClientProvider client={new QueryClient()}>
-    
-        <div className="space-y-6">
-          {/* Header Actions */}
+
+      <div className="space-y-6">
+
+        {/* Error Message */}
+        {queryError && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-3 rounded">
+            Failed to load data
+          </div>
+        )}
+
+        <div className="space-y-6"> {/* Content Wrapper */}
+          {/* Header */}
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-              Danh sách thuật ngữ
-            </h2>
-          </div>
-
-          {/* Error Message */}
-          {queryError && (
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-3 rounded">
-              Failed to load data
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                Quản Lý Từ Điển Toàn Cục
+              </h1>
+              <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                Trung tâm quản lý các thuật ngữ dịch thuật toàn cục trong hệ thống
+              </p>
             </div>
-          )}
-
-<div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-              Quản Lý Từ Điển Toàn Cục
-            </h1>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              Trung tâm quản lý các thuật ngữ dịch thuật toàn cục trong hệ thống
-            </p>
+            <Button onClick={handleCreate}>
+              Thêm thuật ngữ
+            </Button>
           </div>
-          <Button onClick={handleCreate}>
-            Thêm thuật ngữ
-          </Button>
-        </div>
           {/* Filter Bar */}
           <FilterBar
             searchValue={search}
@@ -373,15 +367,13 @@ function GlobalGlossaryContent() {
                           </div>
                           <div className="ml-6">
                             <span
-                              className={`inline-flex items-center px-3 py-1 text-sm font-semibold rounded-full ${
-                                readingItem.is_active
+                              className={`inline-flex items-center px-3 py-1 text-sm font-semibold rounded-full ${readingItem.is_active
                                   ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
                                   : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
-                              }`}
+                                }`}
                             >
-                              <div className={`w-2 h-2 rounded-full mr-2 ${
-                                readingItem.is_active ? 'bg-green-500' : 'bg-red-500'
-                              }`}></div>
+                              <div className={`w-2 h-2 rounded-full mr-2 ${readingItem.is_active ? 'bg-green-500' : 'bg-red-500'
+                                }`}></div>
                               {readingItem.is_active ? 'Hoạt động' : 'Tạm dừng'}
                             </span>
                           </div>

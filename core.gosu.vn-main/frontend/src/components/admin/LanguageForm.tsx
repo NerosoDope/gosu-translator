@@ -348,7 +348,7 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
     setSearchQuery(value);
     setShowSuggestions(value.length > 0);
     validateName(value);
-    
+
     // Try to find matching language (English name, native name, or Vietnamese alias) and auto-fill code
     if (value.length > 0) {
       const matched = ISO_LANGUAGES.find(lang => {
@@ -359,7 +359,7 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
           aliases.some(alias => alias.toLowerCase() === lower)
         );
       });
-      
+
       if (matched && !code) {
         setCode(matched.code);
         validateCode(matched.code);
@@ -434,7 +434,7 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
     const value = e.target.value.toLowerCase();
     setCode(value);
     validateCode(value);
-    
+
     // Try to auto-fill name when code is entered manually
     if (value.length === 2 && !name) {
       const matched = ISO_LANGUAGES.find(lang => lang.code === value);
@@ -474,7 +474,7 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
       onSuccess();
     } catch (error: any) {
       console.error('Error saving language:', error);
-      
+
       // Handle network errors
       if (!error.response) {
         // Network error - không có response từ server
@@ -482,12 +482,12 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
         toast.error(networkError);
         return;
       }
-      
+
       // Extract error message from API response
       // Handle both formats: FastAPI default (detail) and custom exception handler (error.message)
       const responseData = error?.response?.data;
       let errorMessage = 'Không thể tạo/cập nhật ngôn ngữ. Vui lòng thử lại.';
-      
+
       if (responseData) {
         // Try custom exception handler format first
         if (responseData.error?.message) {
@@ -495,8 +495,8 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
         }
         // Fallback to FastAPI default format
         else if (responseData.detail) {
-          errorMessage = typeof responseData.detail === 'string' 
-            ? responseData.detail 
+          errorMessage = typeof responseData.detail === 'string'
+            ? responseData.detail
             : JSON.stringify(responseData.detail);
         }
         // Fallback to message field
@@ -504,14 +504,14 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
           errorMessage = responseData.message;
         }
       }
-      
+
       // Fallback to error.message
       if (!errorMessage || errorMessage === 'Không thể tạo/cập nhật ngôn ngữ. Vui lòng thử lại.') {
         errorMessage = error?.message || errorMessage;
       }
-      
+
       toast.error(errorMessage);
-      
+
       // Show validation errors if available
       if (responseData?.error?.details) {
         const details = responseData.error.details;
@@ -562,11 +562,10 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
                 // Delay hiding suggestions to allow click on suggestion
                 setTimeout(() => setShowSuggestions(false), 200);
               }}
-              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${
-                nameError
+              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${nameError
                   ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                   : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
-              } dark:bg-gray-700 dark:text-gray-100`}
+                } dark:bg-gray-700 dark:text-gray-100`}
               placeholder="Nhập hoặc chọn ngôn ngữ (vd: English, Tiếng Việt, 日本語)"
               maxLength={100}
               required
@@ -625,14 +624,27 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
             Mã ngôn ngữ <span className="text-red-500">*</span>
           </label>
           <input
+            hidden
             type="text"
             value={code}
             onChange={handleCodeChange}
-            className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${
-              codeError
+            className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${codeError
                 ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                 : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
-            } dark:bg-gray-700 dark:text-gray-100`}
+              } dark:bg-gray-700 dark:text-gray-100`}
+            placeholder="vd: vi, en, ja, zh"
+            maxLength={2}
+            required
+          />
+          <input
+            disabled
+            type="text"
+            value={code}
+            onChange={handleCodeChange}
+            className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${codeError
+                ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
+                : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
+              } dark:bg-gray-700 dark:text-gray-100`}
             placeholder="vd: vi, en, ja, zh"
             maxLength={2}
             required
@@ -643,8 +655,8 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
             </p>
           )}
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            Mã ngôn ngữ theo chuẩn ISO 639-1 (2 ký tự, ví dụ: vi, en, ja, zh). 
-            Tự động điền khi chọn ngôn ngữ từ danh sách, hoặc nhập thủ công.
+            Mã ngôn ngữ theo chuẩn ISO 639-1 (2 ký tự, ví dụ: vi, en, ja, zh).
+            Tự động điền khi chọn ngôn ngữ từ danh sách.
           </p>
         </div>
 
@@ -730,11 +742,10 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
                 <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
                   Trạng thái:
                 </span>
-                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                  isActive
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${isActive
                     ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
                     : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
-                }`}>
+                  }`}>
                   {isActive ? 'Hoạt động' : 'Tạm dừng'}
                 </span>
               </div>

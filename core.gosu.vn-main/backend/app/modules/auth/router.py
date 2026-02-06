@@ -231,7 +231,6 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email hoặc mật khẩu không đúng"
         )
-    
     # Bước 6: Verify password với MD5
     try:
         if not login_data.password or len(login_data.password.strip()) == 0:

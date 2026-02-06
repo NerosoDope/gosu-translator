@@ -25,6 +25,7 @@ export default function GameCategoryForm({ category, onSuccess, onCancel }: Game
 
   // Form validation
   const [nameError, setNameError] = useState('');
+  const [translationStyleError, setTranslationStyleError] = useState('');
 
   // Hooks
   const createGameCategory = useCreateGameCategory();
@@ -45,13 +46,23 @@ export default function GameCategoryForm({ category, onSuccess, onCancel }: Game
     return true;
   };
 
+  const validateTranslationStyle = (value: string) => {
+    if (!value.trim()) {
+      setTranslationStyleError('Vui lòng chọn phong cách dịch');
+      return false;
+    }
+    setTranslationStyleError('');
+    return true;
+  };
+
   // Form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const isNameValid = validateName(name);
+    const isTranslationStyleValid = validateTranslationStyle(translationStyle);
 
-    if (!isNameValid) {
+    if (!isNameValid || !isTranslationStyleValid) {
       return;
     }
 
@@ -184,13 +195,24 @@ export default function GameCategoryForm({ category, onSuccess, onCancel }: Game
         {/* Translation Style */}
         <div className="space-y-2">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-            Phong cách dịch
+            Phong cách dịch <span className="text-red-500">*</span>
           </label>
           <select
             value={translationStyle}
-            onChange={e => setTranslationStyle(e.target.value)}
-            className="w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-gray-100"
+            onChange={e => {
+              setTranslationStyle(e.target.value);
+              validateTranslationStyle(e.target.value);
+            }}
+            className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+              translationStyleError
+                ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
+                : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
+            } dark:bg-gray-700 dark:text-gray-100`}
+            required
           >
+            <option value="" disabled>
+              -- Chọn phong cách dịch --
+            </option>
             <option value="Đầy đủ, chi tiết">Đầy đủ, chi tiết</option>
             <option value="Tự nhiên, mượt mà">Tự nhiên, mượt mà</option>
             <option value="Sát nghĩa, giữ cấu trúc">Sát nghĩa, giữ cấu trúc</option>
@@ -198,8 +220,13 @@ export default function GameCategoryForm({ category, onSuccess, onCancel }: Game
             <option value="Văn phong thân mật">Văn phong thân mật</option>
             <option value="Ngắn gọn, súc tích">Ngắn gọn, súc tích</option>
           </select>
+          {translationStyleError && (
+            <p className="text-sm text-red-600 dark:text-red-400">
+              {translationStyleError}
+            </p>
+          )}
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            (Tùy chọn) Chọn phong cách dịch ưu tiên cho các nội dung thuộc danh mục này.
+            Chọn phong cách dịch ưu tiên cho các nội dung thuộc danh mục này.
           </p>
         </div>
 
@@ -235,7 +262,7 @@ export default function GameCategoryForm({ category, onSuccess, onCancel }: Game
           </button>
           <button
             type="submit"
-            disabled={isLoading || !!nameError || !name.trim()}
+            disabled={isLoading || !!nameError || !!translationStyleError || !name.trim() || !translationStyle.trim()}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
           >
             {isLoading ? (
