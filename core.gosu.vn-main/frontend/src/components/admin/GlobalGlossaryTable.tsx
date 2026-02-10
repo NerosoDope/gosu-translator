@@ -9,7 +9,7 @@ interface GlobalGlossaryItem {
   term: string;
   translated_term: string;
   language_pair: string;
-  game_category_id: number;
+  game_category_id: number | null;
   usage_count: number;
   is_active: boolean;
   created_at: string;

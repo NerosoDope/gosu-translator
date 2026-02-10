@@ -19,7 +19,7 @@ class Global_Glossary(Base):
     term = Column(String(255), nullable=False)
     translated_term = Column(String(255), nullable=False)
     language_pair = Column(String(255), nullable=False)
-    game_category_id = Column(Integer, ForeignKey("game_category.id"), nullable=False)
+    game_category_id = Column(Integer, ForeignKey("game_category.id"), nullable=True)
     usage_count = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
