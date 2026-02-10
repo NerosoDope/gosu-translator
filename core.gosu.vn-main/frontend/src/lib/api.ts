@@ -360,11 +360,11 @@ export const cacheAPI = {
 
 // Prompts API
 export const promptsAPI = {
-  getList: (params?: any) => apiClient.get(`/prompts`, { params }),
-  get: (id: number) => apiClient.get(`/prompts/${id}`),
-  create: (data: any) => apiClient.post(`/prompts`, data),
-  update: (id: number, data: any) => apiClient.put(`/prompts/${id}`, data),
-  delete: (id: number) => apiClient.delete(`/prompts/${id}`),
+  getList: (params?: any) => apiClient.get(`/prompts`, { params }).then((res) => res.data),
+  get: (id: number) => apiClient.get(`/prompts/${id}`).then((res) => res.data),
+  create: (data: any) => apiClient.post(`/prompts`, data).then((res) => res.data),
+  update: (id: number, data: any) => apiClient.put(`/prompts/${id}`, data).then((res) => res.data),
+  delete: (id: number) => apiClient.delete(`/prompts/${id}`).then((res) => res.data),
 };
 
 // Game Category API

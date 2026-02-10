@@ -1,7 +1,8 @@
 import { useLanguageList, useDeleteLanguage } from '@/hooks/useLanguage';
+import { Language } from '@/types/api';
 import { useState } from 'react';
 
-export default function LanguageTable({ onEdit }: { onEdit: (language: any) => void }) {
+export default function LanguageTable({ onEdit }: { onEdit: (language: Language) => void }) {
   const { data, isLoading, error } = useLanguageList();
   const deleteLanguage = useDeleteLanguage();
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -24,7 +25,7 @@ export default function LanguageTable({ onEdit }: { onEdit: (language: any) => v
           </tr>
         </thead>
         <tbody>
-          {data?.data?.map((language: any) => (
+          {data?.items?.map((language: Language) => (
             <tr key={language.id} className="border-b border-gray-200 dark:border-gray-700">
               <td className="px-4 py-3 text-sm">{language.id}</td>
               <td className="px-4 py-3 text-sm">{language.code}</td>

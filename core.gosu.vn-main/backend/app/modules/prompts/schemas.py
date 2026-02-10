@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class PromptBase(BaseModel):
@@ -24,3 +24,11 @@ class PromptResponse(PromptBase):
 
     class Config:
         orm_mode = True
+
+
+class PromptListResponse(BaseModel):
+    data: List[PromptResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
