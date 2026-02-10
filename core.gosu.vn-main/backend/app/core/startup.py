@@ -50,6 +50,48 @@ DEFAULT_PERMISSIONS: List[Dict[str, Any]] = [
     
     # Audit Log
     {"code": "audit:read", "name": "Read Audit Logs", "module": "audit", "resource": "audit", "action": "read", "description": "Permission to read audit logs"},
+
+     # Jobs management
+    {"code": "jobs:create", "name": "Create Jobs", "module": "jobs", "resource": "jobs", "action": "create", "description": "Permission to create jobs"},
+    {"code": "jobs:read", "name": "Read Jobs", "module": "jobs", "resource": "jobs", "action": "read", "description": "Permission to read jobs"},
+    {"code": "jobs:update", "name": "Update Jobs", "module": "jobs", "resource": "jobs", "action": "update", "description": "Permission to update jobs"},
+    {"code": "jobs:delete", "name": "Delete Jobs", "module": "jobs", "resource": "jobs", "action": "delete", "description": "Permission to delete jobs"},
+
+    # Cache management
+    {"code": "cache:create", "name": "Create Cache", "module": "cache", "resource": "cache", "action": "create", "description": "Permission to create cache entries"},
+    {"code": "cache:read", "name": "Read Cache", "module": "cache", "resource": "cache", "action": "read", "description": "Permission to read cache entries"},
+    {"code": "cache:update", "name": "Update Cache", "module": "cache", "resource": "cache", "action": "update", "description": "Permission to update cache entries"},
+    {"code": "cache:delete", "name": "Delete Cache", "module": "cache", "resource": "cache", "action": "delete", "description": "Permission to delete cache entries"},
+
+    # Dictionary management 
+    {"code": "dictionary:create", "name": "Create Dictionary", "module": "dictionary", "resource": "dictionary", "action": "create", "description": "Permission to create dictionary entries"},
+    {"code": "dictionary:read", "name": "Read Dictionary", "module": "dictionary", "resource": "dictionary", "action": "read", "description": "Permission to read dictionary entries"},
+    {"code": "dictionary:update", "name": "Update Dictionary", "module": "dictionary", "resource": "dictionary", "action": "update", "description": "Permission to update dictionary entries"},
+    {"code": "dictionary:delete", "name": "Delete Dictionary", "module": "dictionary", "resource": "dictionary", "action": "delete", "description": "Permission to delete dictionary entries"},
+
+    # Prompts management
+    {"code": "prompts:create", "name": "Create Prompts", "module": "prompts", "resource": "prompts", "action": "create", "description": "Permission to create prompts"},
+    {"code": "prompts:read", "name": "Read Prompts", "module": "prompts", "resource": "prompts", "action": "read", "description": "Permission to read prompts"},
+    {"code": "prompts:update", "name": "Update Prompts", "module": "prompts", "resource": "prompts", "action": "update", "description": "Permission to update prompts"},
+    {"code": "prompts:delete", "name": "Delete Prompts", "module": "prompts", "resource": "prompts", "action": "delete", "description": "Permission to delete prompts"},
+
+    # Game Category management
+    {"code": "game_category:create", "name": "Create Game Categories", "module": "game_category", "resource": "game_category", "action": "create", "description": "Permission to create game categories"},
+    {"code": "game_category:read", "name": "Read Game Categories", "module": "game_category", "resource": "game_category", "action": "read", "description": "Permission to read game categories"},
+    {"code": "game_category:update", "name": "Update Game Categories", "module": "game_category", "resource": "game_category", "action": "update", "description": "Permission to update game categories"},
+    {"code": "game_category:delete", "name": "Delete Game Categories", "module": "game_category", "resource": "game_category", "action": "delete", "description": "Permission to delete game categories"},
+
+    # Game Glossary management
+    {"code": "game_glossary:create", "name": "Create Game Glossary", "module": "game_glossary", "resource": "game_glossary", "action": "create", "description": "Permission to create game glossary entries"},
+    {"code": "game_glossary:read", "name": "Read Game Glossary", "module": "game_glossary", "resource": "game_glossary", "action": "read", "description": "Permission to read game glossary entries"},
+    {"code": "game_glossary:update", "name": "Update Game Glossary", "module": "game_glossary", "resource": "game_glossary", "action": "update", "description": "Permission to update game glossary entries"},
+    {"code": "game_glossary:delete", "name": "Delete Game Glossary", "module": "game_glossary", "resource": "game_glossary", "action": "delete", "description": "Permission to delete game glossary entries"},
+
+    # Languages management
+    {"code": "languages:create", "name": "Create Languages", "module": "languages", "resource": "languages", "action": "create", "description": "Permission to create languages"},
+    {"code": "languages:read", "name": "Read Languages", "module": "languages", "resource": "languages", "action": "read", "description": "Permission to read languages"},
+    {"code": "languages:update", "name": "Update Languages", "module": "languages", "resource": "languages", "action": "update", "description": "Permission to update languages"},
+    {"code": "languages:delete", "name": "Delete Languages", "module": "languages", "resource": "languages", "action": "delete", "description": "Permission to delete languages"},
 ]
 
 

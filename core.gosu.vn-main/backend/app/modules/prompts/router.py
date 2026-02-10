@@ -1,17 +1,33 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 from app.db.session import get_db
 from .service import PromptsService
-from .schemas import PromptCreate, PromptUpdate, PromptResponse
+from .schemas import PromptCreate, PromptUpdate, PromptResponse, PromptListResponse
 from typing import List
 
-router = APIRouter(tags=["Prompts"])
+router = APIRouter(prefix="", tags=["Prompts"])
 
-@router.get("/", response_model=List[PromptResponse])
-async def list_prompts(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):
+
+@router.get("/", response_model=PromptListResponse)
+async def list_prompts(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    query: Optional[str] = Query(None, alias="query"),
+    is_active: Optional[bool] = Query(None),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("asc"),
+    db: AsyncSession = Depends(get_db),
+):
     service = PromptsService(db)
-    items = await service.list(skip=skip, limit=limit)
-    return items
+    return await service.list(
+        skip=skip,
+        limit=limit,
+        query=query,
+        is_active=is_active,
+        sort_by=sort_by,
+        sort_order=sort_order or "asc",
+    )
 
 @router.get("/{id}", response_model=PromptResponse)
 async def get_prompt(id: int, db: AsyncSession = Depends(get_db)):
