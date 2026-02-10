@@ -266,7 +266,7 @@ def upgrade() -> None:
         sa.Column("term", sa.String(length=255), nullable=False),
         sa.Column("translated_term", sa.String(length=255), nullable=False),
         sa.Column("language_pair", sa.String(length=255), nullable=False),
-        sa.Column("game_category_id", sa.Integer(), nullable=False),
+        sa.Column("game_category_id", sa.Integer(), nullable=True),
         sa.Column("usage_count", sa.Integer(), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=True),
         sa.Column(

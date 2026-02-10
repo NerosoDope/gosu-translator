@@ -9,7 +9,7 @@ interface GlobalGlossaryItem {
   term: string;
   translated_term: string;
   language_pair: string;
-  game_category_id: number;
+  game_category_id: number | null;
   usage_count: number;
   is_active: boolean;
   created_at: string;
@@ -125,11 +125,7 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
     return true;
   };
 
-  const validateGameCategory = (value: string) => {
-    if (!value) {
-      setGameCategoryError('Thể loại game là bắt buộc');
-      return false;
-    }
+  const validateGameCategory = (_value: string) => {
     setGameCategoryError('');
     return true;
   };
@@ -152,7 +148,7 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
         term: term.trim(),
         translated_term: translatedTerm.trim(),
         language_pair: `${sourceLanguage}-${targetLanguage}`,
-        game_category_id: parseInt(gameCategoryId),
+        game_category_id: gameCategoryId ? parseInt(gameCategoryId, 10) : null,
         usage_count: usageCount,
         is_active: isActive,
       };
@@ -360,7 +356,7 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
         {/* Game Category */}
         <div className="space-y-2">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-            Thể loại game <span className="text-red-500">*</span>
+            Thể loại game
           </label>
           <select
             value={gameCategoryId}
@@ -375,7 +371,7 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
             } dark:bg-gray-700 dark:text-gray-100`}
             required
           >
-            <option value="">Chọn thể loại game</option>
+            <option value="0">Chọn thể loại game</option>
             {gameCategories.map((category: GameCategory) => (
               <option key={category.id} value={category.id.toString()}>
                 {category.name}
@@ -434,7 +430,7 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
           </button>
           <button
             type="submit"
-            disabled={isLoading || !!termError || !!translatedTermError || !!languagePairError || !!gameCategoryError || !term.trim() || !translatedTerm.trim() || !sourceLanguage || !targetLanguage || !gameCategoryId}
+            disabled={isLoading || !!termError || !!translatedTermError || !!languagePairError || !!gameCategoryError || !term.trim() || !translatedTerm.trim() || !sourceLanguage || !targetLanguage}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center"
           >
             {isLoading ? (

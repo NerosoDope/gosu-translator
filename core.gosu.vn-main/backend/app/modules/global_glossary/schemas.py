@@ -15,7 +15,7 @@ class Global_GlossaryBase(BaseModel):
     term: str
     translated_term: str
     language_pair: str
-    game_category_id: int
+    game_category_id: Optional[int] = None
     usage_count: Optional[int] = 0
     is_active: Optional[bool] = True
 
