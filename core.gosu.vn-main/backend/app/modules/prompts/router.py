@@ -9,7 +9,7 @@ from typing import List
 router = APIRouter(prefix="", tags=["Prompts"])
 
 
-@router.get("/", response_model=PromptListResponse)
+@router.get("", response_model=PromptListResponse)
 async def list_prompts(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -37,7 +37,7 @@ async def get_prompt(id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Prompt not found")
     return item
 
-@router.post("/", response_model=PromptResponse)
+@router.post("", response_model=PromptResponse)
 async def create_prompt(data: PromptCreate, db: AsyncSession = Depends(get_db)):
     service = PromptsService(db)
     return await service.create(data.model_dump())

@@ -826,35 +826,7 @@ sys.path.insert(0, '/app')
 
 from app.core.config import settings
 from app.modules.rbac.models import Permission, Role
-
-# Default permissions to create (phải khớp với backend/app/core/startup.py)
-DEFAULT_PERMISSIONS = [
-    # User management
-    {"code": "users:read", "name": "Read Users", "module": "users", "resource": "users", "action": "read", "description": "Permission to read users"},
-    {"code": "users:write", "name": "Write Users", "module": "users", "resource": "users", "action": "write", "description": "Permission to create and update users"},
-    {"code": "users:delete", "name": "Delete Users", "module": "users", "resource": "users", "action": "delete", "description": "Permission to delete users"},
-    
-    # RBAC management
-    {"code": "rbac:roles:read", "name": "Read Roles", "module": "rbac", "resource": "roles", "action": "read", "description": "Permission to read roles"},
-    {"code": "rbac:roles:write", "name": "Write Roles", "module": "rbac", "resource": "roles", "action": "write", "description": "Permission to create and update roles"},
-    {"code": "rbac:roles:delete", "name": "Delete Roles", "module": "rbac", "resource": "roles", "action": "delete", "description": "Permission to delete roles"},
-    {"code": "rbac:permissions:read", "name": "Read Permissions", "module": "rbac", "resource": "permissions", "action": "read", "description": "Permission to read permissions"},
-    {"code": "rbac:permissions:write", "name": "Write Permissions", "module": "rbac", "resource": "permissions", "action": "write", "description": "Permission to create and update permissions"},
-    {"code": "rbac:permissions:delete", "name": "Delete Permissions", "module": "rbac", "resource": "permissions", "action": "delete", "description": "Permission to delete permissions"},
-    {"code": "rbac:user_roles:read", "name": "Read User Roles", "module": "rbac", "resource": "user_roles", "action": "read", "description": "Permission to read user role assignments"},
-    {"code": "rbac:user_roles:write", "name": "Write User Roles", "module": "rbac", "resource": "user_roles", "action": "write", "description": "Permission to assign and revoke user roles"},
-    
-    # Dashboard
-    {"code": "dashboard:read", "name": "Read Dashboard", "module": "dashboard", "resource": "dashboard", "action": "read", "description": "Permission to view dashboard"},
-    
-    # Settings
-    {"code": "settings:read", "name": "Read Settings", "module": "settings", "resource": "settings", "action": "read", "description": "Permission to read settings"},
-    {"code": "settings:write", "name": "Write Settings", "module": "settings", "resource": "settings", "action": "write", "description": "Permission to create and update settings"},
-    {"code": "settings:delete", "name": "Delete Settings", "module": "settings", "resource": "settings", "action": "delete", "description": "Permission to delete settings"},
-    
-    # Audit Log
-    {"code": "audit:read", "name": "Read Audit Logs", "module": "audit", "resource": "audit", "action": "read", "description": "Permission to read audit logs"},
-]
+from app.core.startup import DEFAULT_PERMISSIONS
 
 async def seed():
     # Create database connection - ensure asyncpg driver

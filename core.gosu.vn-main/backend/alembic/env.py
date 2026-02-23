@@ -23,6 +23,7 @@ from app.modules.cache.models import Cache
 from app.modules.game_category.models import GameCategory
 from app.modules.game_glossary.models import Game_Glossary
 from app.modules.global_glossary.models import Global_Glossary
+from app.modules.import_batches.models import ImportBatch
 from app.modules.game.models import Game
 from app.modules.language.models import Language, LanguagePair
 from app.modules.prompts.models import Prompt

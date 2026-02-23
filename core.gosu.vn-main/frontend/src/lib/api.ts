@@ -2,15 +2,17 @@
  * API Client Module - GOSU Core Frontend
  * 
  * Axios client được cấu hình sẵn để gọi API backend.
+ * Khi NEXT_PUBLIC_USE_API_PROXY=true: dùng /api/v1 (proxy qua Next.js) - tránh CORS, login từ máy khác hoạt động.
  */
-//192.168.90.175
 import axios from 'axios';
 
-// Default to localhost; adjust to your backend host as needed.
-const API_URL = 'http://localhost:8000';
+const useProxy = process.env.NEXT_PUBLIC_USE_API_PROXY !== 'false';
+const API_BASE = useProxy
+  ? '/api/v1' // Proxy qua Next.js rewrites -> không CORS
+  : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1`;
 
 const apiClient = axios.create({
-  baseURL: `${API_URL}/api/v1`,
+  baseURL: API_BASE,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -43,7 +45,7 @@ apiClient.interceptors.response.use(
       // Network error - không có response từ server
       if (error.code === 'ECONNREFUSED' || error.message === 'Network Error') {
         error.message = `Không thể kết nối đến server. Vui lòng kiểm tra:
-- Backend server đang chạy tại ${API_URL}
+- Backend server đang chạy tại ${API_BASE}
 - CORS được cấu hình đúng
 - Network connection hoạt động bình thường`;
       } else if (error.code === 'ETIMEDOUT') {
@@ -384,6 +386,24 @@ export const gameGlossaryAPI = {
   create: (data: any) => apiClient.post(`/game-glossary`, data),
   update: (id: number, data: any) => apiClient.put(`/game-glossary/${id}`, data),
   delete: (id: number) => apiClient.delete(`/game-glossary/${id}`),
+  deleteAll: (gameId?: number) =>
+    apiClient.delete(`/game-glossary/all`, { params: gameId ? { game_id: gameId } : {} }),
+  exportExcel: (gameId?: number) =>
+    apiClient.get(`/game-glossary/export/excel`, {
+      params: gameId ? { game_id: gameId } : {},
+      responseType: 'blob',
+    }),
+  uploadExcel: (file: File, gameId?: number) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const params = gameId ? { game_id: gameId } : {};
+    return apiClient.post(`/game-glossary/upload-excel`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      params,
+    });
+  },
 };
 
 // Language API
@@ -435,6 +455,42 @@ export const global_glossaryAPI = {
   create: (data: any) => apiClient.post(`/global-glossary`, data),
   update: (id: number, data: any) => apiClient.put(`/global-glossary/${id}`, data),
   delete: (id: number) => apiClient.delete(`/global-glossary/${id}`),
+  deleteAll: () => apiClient.delete(`/global-glossary/all`),
+  exportExcel: () =>
+    apiClient.get(`/global-glossary/export/excel`, {
+      responseType: 'blob',
+    }),
+  uploadExcel: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post(`/global-glossary/upload-excel`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+};
+
+// Import Batches API (lịch sử import, rollback)
+export const importBatchesAPI = {
+  getList: (params?: { skip?: number; limit?: number; source_type?: string; game_id?: number }) =>
+    apiClient.get(`/import-batches`, { params }),
+  get: (id: number) => apiClient.get(`/import-batches/${id}`),
+  rollback: (batchId: number) =>
+    apiClient.post(`/import-batches/${batchId}/rollback`),
+};
+
+// Files API (MinIO uploads)
+export const filesAPI = {
+  upload: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post('/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
 };
 
 // Game API

@@ -7,7 +7,7 @@ Version: 1.0.0
 
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.modules.game_glossary.models import Game_Glossary
 
 
@@ -75,7 +75,6 @@ class Game_GlossaryRepository:
     
     async def delete(self, id: int) -> bool:
         """Delete game_glossary"""
-        # TODO: Implement when model is created
         result = await self.db.execute(select(Game_Glossary).where(Game_Glossary.id == id))
         item = result.scalar_one_or_none()
         if not item:
@@ -83,3 +82,36 @@ class Game_GlossaryRepository:
         await self.db.delete(item)
         await self.db.commit()
         return True
+
+    async def delete_all(self, game_id: Optional[int] = None) -> int:
+        """Delete all game_glossary, optionally filter by game_id. Return count deleted."""
+        query = delete(Game_Glossary)
+        if game_id is not None:
+            query = query.where(Game_Glossary.game_id == game_id)
+        result = await self.db.execute(query)
+        await self.db.commit()
+        return result.rowcount
+
+    async def get_existing_keys(self, game_ids: Optional[List[int]] = None) -> set:
+        """Trả về set các (term, translated_term, language_pair, game_id) đã tồn tại."""
+        query = select(
+            Game_Glossary.term, Game_Glossary.translated_term,
+            Game_Glossary.language_pair, Game_Glossary.game_id
+        )
+        if game_ids:
+            query = query.where(Game_Glossary.game_id.in_(game_ids))
+        result = await self.db.execute(query)
+        rows = result.all()
+        return {(r.term, r.translated_term, r.language_pair, r.game_id) for r in rows}
+
+    async def bulk_create(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Bulk create game_glossary items"""
+        created_items = []
+        for data in items:
+            item = Game_Glossary(**data)
+            self.db.add(item)
+            created_items.append(item)
+        await self.db.commit()
+        for item in created_items:
+            await self.db.refresh(item)
+        return [item.to_dict() for item in created_items]

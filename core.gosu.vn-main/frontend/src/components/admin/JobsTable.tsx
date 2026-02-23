@@ -21,7 +21,7 @@ export default function JobsTable({ onEdit }: { onEdit: (job: any) => void }) {
           </tr>
         </thead>
         <tbody>
-          {data?.data?.map((job: any) => (
+          {data?.items?.map((job: any) => (
             <tr key={job.id} className="border-b border-gray-200 dark:border-gray-700">
               <td className="px-4 py-3 text-sm">{job.id}</td>
               <td className="px-4 py-3 text-sm">{job.title}</td>

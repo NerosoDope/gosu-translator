@@ -63,15 +63,21 @@ export function usePermissions() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Fetch user data which includes permissions and roles
+    const PERMISSIONS_TIMEOUT_MS = 10000;
+
     const fetchUser = async () => {
       try {
-        const response = await authAPI.getMe();
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Permissions fetch timeout')), PERMISSIONS_TIMEOUT_MS)
+        );
+        const response = await Promise.race([
+          authAPI.getMe(),
+          timeoutPromise,
+        ]);
         const userData = response.data;
         setPermissions(userData?.permissions || []);
         setRoles(userData?.roles || []);
       } catch (error) {
-        // If auth fails, user will be redirected by API interceptor
         console.error('Failed to fetch user permissions:', error);
         setPermissions([]);
         setRoles([]);

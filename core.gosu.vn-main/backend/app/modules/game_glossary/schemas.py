@@ -6,7 +6,7 @@ Version: 1.0.0
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -43,3 +43,14 @@ class Game_GlossaryResponse(Game_GlossaryBase):
     
     class Config:
         from_attributes = True
+
+
+class ExcelUploadResponse(BaseModel):
+    """Schema response cho upload Excel"""
+    success: bool
+    total_rows: int
+    created_count: int
+    skipped_count: int = 0  # Số dòng bỏ qua vì đã tồn tại (term + translated_term + language_pair + game_id)
+    error_count: int
+    errors: List[str] = []
+    import_id: Optional[int] = None  # ID lô import - dùng để rollback khi cần

@@ -101,7 +101,7 @@ services:
       GOSU_SECRET: ${GOSU_SECRET}
       DEBUG: ${DEBUG:-True}
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000} # http://192.168.90.239:3000
       SSL_VERIFY: ${SSL_VERIFY:-True}
     depends_on:
       postgres:
@@ -130,7 +130,10 @@ services:
     env_file:
       - ./deploy/.env
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}  #192.168.90.175
+      # BACKEND_URL: Next.js proxy /api/v1 -> backend (same Docker network) - login từ máy khác hoạt động
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_USE_API_PROXY: "true"
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://192.168.90.239:8000}
       WATCHPACK_POLLING: "true"
     ports:
       - "3000:3000"

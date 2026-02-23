@@ -103,7 +103,9 @@ services:
       context: ../frontend
       dockerfile: Dockerfile.dev
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_USE_API_PROXY: "true"
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://192.168.90.239:8000}
       WATCHPACK_POLLING: "true"
     ports:
       - "3000:3000"

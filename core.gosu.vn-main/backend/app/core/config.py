@@ -93,7 +93,9 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
     ALLOWED_FILE_TYPES: List[str] = [
         "image/jpeg", "image/png", "image/gif",
-        "application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "application/pdf", 
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # .xlsx
+        "application/vnd.ms-excel"  # .xls
     ]
     
     # Pagination

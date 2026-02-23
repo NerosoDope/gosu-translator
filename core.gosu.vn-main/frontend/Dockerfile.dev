@@ -12,6 +12,5 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
-# Run development server
 CMD ["npm", "run", "dev"]
 

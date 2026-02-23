@@ -47,25 +47,34 @@ export default function PortalLayout({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const AUTH_TIMEOUT_MS = 15000;
+
     const checkAuth = async () => {
       const token = authStore.getToken();
       if (!token) {
+        setLoading(false);
         router.push("/login");
         return;
       }
 
       try {
-        const user = await authStore.getCurrentUser();
+        const timeoutPromise = new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error("Auth check timeout")), AUTH_TIMEOUT_MS)
+        );
+        const user = await Promise.race([
+          authStore.getCurrentUser(),
+          timeoutPromise,
+        ]);
         if (!user) {
+          setLoading(false);
           router.push("/login");
           return;
         }
+        setLoading(false);
       } catch (error) {
+        setLoading(false);
         router.push("/login");
-        return;
       }
-
-      setLoading(false);
     };
 
     checkAuth();

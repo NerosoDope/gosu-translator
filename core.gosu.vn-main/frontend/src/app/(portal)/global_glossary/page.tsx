@@ -8,6 +8,7 @@ import FilterBar from '@/components/data/FilterBar';
 import Button from '@/components/ui/Button';
 import GlobalGlossaryForm from '@/components/admin/GlobalGlossaryForm';
 import GlobalGlossaryTable from '@/components/admin/GlobalGlossaryTable';
+import ExcelUploadModal from '@/components/admin/ExcelUploadModal';
 
 // Hooks
 import {
@@ -16,7 +17,7 @@ import {
 } from '@/hooks/useGlobal_glossary';
 
 // API
-import { gameCategoryAPI } from '@/lib/api';
+import { gameCategoryAPI, global_glossaryAPI } from '@/lib/api';
 
 // Context
 import { useToastContext } from '@/context/ToastContext';
@@ -47,8 +48,11 @@ function GlobalGlossaryContent() {
   const [showForm, setShowForm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<GlobalGlossaryItem | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [readingItem, setReadingItem] = useState<GlobalGlossaryItem | undefined>();
   const [showReadModal, setShowReadModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   const [items, setItems] = useState<GlobalGlossaryItem[]>([]);
   const [pagination, setPagination] = useState({
@@ -179,6 +183,50 @@ function GlobalGlossaryContent() {
     setDeleteTarget(null);
   };
 
+  const handleDeleteAllClick = () => setShowDeleteAllConfirm(true);
+  const handleCancelDeleteAll = () => setShowDeleteAllConfirm(false);
+  const handleConfirmDeleteAll = async () => {
+    try {
+      setDeletingAll(true);
+      const res = await global_glossaryAPI.deleteAll();
+      const count = res.data?.deleted_count ?? 0;
+      refetch();
+      showToast(`Đã xoá ${count} thuật ngữ.`);
+      setShowDeleteAllConfirm(false);
+    } catch (err: any) {
+      showErrorToast(err.response?.data?.detail || err.message || 'Có lỗi xảy ra khi xóa!');
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try {
+      const response = await global_glossaryAPI.exportExcel();
+      const blob = new Blob(
+        [response.data],
+        {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }
+      );
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'global_glossary_export.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      showToast('Đã xuất Excel thành công.');
+    } catch (error: any) {
+      console.error('Export Excel error:', error);
+      const message =
+        error.response?.data?.detail ||
+        error.message ||
+        'Có lỗi xảy ra khi xuất Excel.';
+      showErrorToast(message);
+    }
+  };
   const handleSort = (
     columnKey: string | null,
     direction: 'asc' | 'desc' | null
@@ -216,9 +264,55 @@ function GlobalGlossaryContent() {
                 Trung tâm quản lý các thuật ngữ dịch thuật toàn cục trong hệ thống
               </p>
             </div>
-            <Button onClick={handleCreate}>
-              Thêm thuật ngữ
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="secondary"
+                onClick={handleDeleteAllClick}
+                className="text-red-600 border-red-300 hover:bg-red-50 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-900/20"
+              >
+                <svg className="w-5 h-5 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Xóa tất cả
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleExportExcel}
+              >
+                <svg
+                  className="w-5 h-5 mr-2 inline"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v12a2 2 0 002 2h12"
+                  />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M16 12l-4 4m0 0l-4-4m4 4V2"
+                  />
+                </svg>
+                Export Excel
+              </Button>
+              <Button
+                onClick={() => setShowUploadModal(true)}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                <svg className="w-5 h-5 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                Upload Excel
+              </Button>
+              <Button onClick={handleCreate}>
+                Thêm thuật ngữ
+              </Button>
+            </div>
           </div>
           {/* Filter Bar */}
           <FilterBar
@@ -281,32 +375,21 @@ function GlobalGlossaryContent() {
 
           {/* Read Modal */}
           {showReadModal && readingItem && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={handleReadModalClose}>
+              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                 <div className="relative">
-                  {/* Header with gradient background */}
-                  <div className="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4 rounded-t-2xl">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        </div>
-                        <h3 className="text-xl font-bold text-white">
-                          Chi tiết thuật ngữ
-                        </h3>
-                      </div>
-                      <button
-                        onClick={handleReadModalClose}
-                        className="text-white/80 hover:text-white hover:bg-white/20 transition-all duration-200 p-2 rounded-full"
-                        title="Đóng"
-                      >
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
+                  {/* Header - giống chi tiết thuật ngữ game */}
+                  <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 z-10">
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Chi tiết thuật ngữ</h3>
+                    <button
+                      onClick={handleReadModalClose}
+                      className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+                      title="Đóng"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </div>
 
                   {/* Content */}
@@ -565,7 +648,66 @@ function GlobalGlossaryContent() {
               </div>
             </div>
           </div>
+          )}
+
+        {/* Delete All Confirmation Modal */}
+        {showDeleteAllConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full">
+              <div className="p-6">
+                <div className="flex items-center mb-4">
+                  <div className="flex-shrink-0 w-12 h-12 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center">
+                    <svg className="w-6 h-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                  </div>
+                  <div className="ml-4">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                      Xóa tất cả thuật ngữ
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="mb-6">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Bạn có chắc chắn muốn xóa <span className="font-medium text-red-600 dark:text-red-400">tất cả</span> thuật ngữ trong từ điển toàn cục?
+                  </p>
+                  <p className="text-xs text-red-600 dark:text-red-400 mt-2">
+                    Hành động này không thể hoàn tác.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    onClick={handleCancelDeleteAll}
+                    disabled={deletingAll}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                  >
+                    Hủy bỏ
+                  </button>
+                  <button
+                    onClick={handleConfirmDeleteAll}
+                    disabled={deletingAll}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {deletingAll ? 'Đang xóa...' : 'Xóa tất cả'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
+
+          {/* Excel Upload Modal */}
+          <ExcelUploadModal
+            isOpen={showUploadModal}
+            onClose={() => setShowUploadModal(false)}
+            onSuccess={() => {
+              refetch();
+            }}
+            uploadFunction={global_glossaryAPI.uploadExcel}
+            title="Upload Excel - Từ Điển Toàn Cục"
+          />
       </div>
     </QueryClientProvider>
   );

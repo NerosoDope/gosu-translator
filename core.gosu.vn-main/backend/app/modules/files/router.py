@@ -24,6 +24,8 @@ Author: GOSU Development Team
 Version: 1.0.0
 """
 
+import io
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
 from app.core.config import settings
 from minio import Minio
@@ -43,6 +45,13 @@ minio_client = Minio(
     secret_key=settings.MINIO_SECRET_KEY,
     secure=settings.MINIO_SECURE
 )
+
+
+def _ensure_bucket_exists():
+    """Đảm bảo bucket tồn tại, tạo mới nếu chưa có."""
+    if not minio_client.bucket_exists(settings.MINIO_BUCKET_NAME):
+        minio_client.make_bucket(settings.MINIO_BUCKET_NAME)
+        logger.info(f"Created MinIO bucket: {settings.MINIO_BUCKET_NAME}")
 
 
 @router.post("/upload")
@@ -78,12 +87,14 @@ async def upload_file(file: UploadFile = File(...)):
                 detail=f"File type {file.content_type} not allowed"
             )
         
-        # Upload lên MinIO
+        # Đảm bảo bucket tồn tại
+        _ensure_bucket_exists()
+        # Upload lên MinIO (dùng BytesIO vì file.read() đã consume stream)
         object_name = f"uploads/{file.filename}"
         minio_client.put_object(
             settings.MINIO_BUCKET_NAME,
             object_name,
-            file.file,
+            io.BytesIO(file_content),
             length=len(file_content),
             content_type=file.content_type
         )

@@ -7,7 +7,7 @@ Version: 1.0.0
 
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.modules.global_glossary.models import Global_Glossary
 
 
@@ -59,3 +59,29 @@ class Global_GlossaryRepository:
         await self.db.delete(item)
         await self.db.commit()
         return True
+
+    async def delete_all(self) -> int:
+        """Delete all global_glossary, return count deleted"""
+        result = await self.db.execute(delete(Global_Glossary))
+        await self.db.commit()
+        return result.rowcount
+
+    async def get_existing_keys(self) -> set:
+        """Trả về set các (term, translated_term, language_pair, game_category_id) đã tồn tại."""
+        result = await self.db.execute(
+            select(Global_Glossary.term, Global_Glossary.translated_term, Global_Glossary.language_pair, Global_Glossary.game_category_id)
+        )
+        rows = result.all()
+        return {(r.term, r.translated_term, r.language_pair, r.game_category_id) for r in rows}
+
+    async def bulk_create(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Bulk create global_glossary items"""
+        created_items = []
+        for data in items:
+            item = Global_Glossary(**data)
+            self.db.add(item)
+            created_items.append(item)
+        await self.db.commit()
+        for item in created_items:
+            await self.db.refresh(item)
+        return [item.to_dict() for item in created_items]

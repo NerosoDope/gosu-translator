@@ -12,7 +12,7 @@ from typing import List, Optional
 router = APIRouter(tags=["Languages"])
 
 # Language endpoints
-@router.get("/", response_model=LanguageListResponse)
+@router.get("", response_model=LanguageListResponse)
 async def list_languages(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -59,7 +59,7 @@ async def get_language(id: int, db: AsyncSession = Depends(get_db)):
         "target_pairs_count": result["target_pairs_count"]
     }
 
-@router.post("/", response_model=LanguageResponse)
+@router.post("", response_model=LanguageResponse)
 async def create_language(data: LanguageCreate, db: AsyncSession = Depends(get_db)):
     service = LanguageService(db)
     return await service.create_language(data)
