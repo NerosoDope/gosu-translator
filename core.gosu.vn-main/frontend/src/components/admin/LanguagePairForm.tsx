@@ -152,7 +152,8 @@ export default function LanguagePairForm({
   // Reset target language when source changes
   useEffect(() => {
     if (!pair && sourceLanguageId && targetLanguageId) {
-      const targets = Array.isArray(availableTargets?.data) ? availableTargets.data : [];
+      const raw = availableTargets?.data;
+      const targets = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' && Array.isArray((raw as any).data) ? (raw as any).data : []);
       const isAvailable = targets.some(
         (lang: Language) => lang.id === parseInt(targetLanguageId)
       );
@@ -205,11 +206,14 @@ export default function LanguagePairForm({
   }
   
 
-  // Prepare target options
+  // Prepare target options (API returns array in response.data; axios response is { data, status, ... })
   let targetOptions: Language[] = [];
-  if (sourceLanguageId && !targetsError && availableTargets?.data) {
-    if (Array.isArray(availableTargets.data)) {
-      targetOptions = availableTargets.data;
+  if (sourceLanguageId && !targetsError && availableTargets) {
+    const raw = availableTargets?.data;
+    if (Array.isArray(raw)) {
+      targetOptions = raw;
+    } else if (raw && typeof raw === 'object' && Array.isArray((raw as any).data)) {
+      targetOptions = (raw as any).data;
     }
   }
 
@@ -304,6 +308,11 @@ export default function LanguagePairForm({
             {!sourceLanguageId && (
               <p className="text-sm text-amber-600 dark:text-amber-400">
                 Vui lòng chọn ngôn ngữ nguồn trước
+              </p>
+            )}
+            {sourceLanguageId && targetsError && (
+              <p className="text-sm text-red-600 dark:text-red-400 mt-1">
+                Không tải được danh sách ngôn ngữ đích. Thử tải lại trang hoặc kiểm tra kết nối.
               </p>
             )}
           </>
