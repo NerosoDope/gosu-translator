@@ -38,9 +38,11 @@ class Game_GlossaryUpdate(BaseModel):
 class Game_GlossaryResponse(Game_GlossaryBase):
     """Schema response cho game_glossary"""
     id: int
+    import_id: Optional[int] = None
+    imported_at: Optional[datetime] = None  # Thời gian import từ import_batches.created_at
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
+
     class Config:
         from_attributes = True
 

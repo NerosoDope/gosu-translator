@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.modules.global_glossary.models import Global_Glossary
+from app.modules.import_batches.models import ImportBatch
 
 
 class Global_GlossaryRepository:
@@ -16,19 +17,55 @@ class Global_GlossaryRepository:
     
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    def _row_to_dict(self, row) -> Dict[str, Any]:
+        """Chuyển row (Global_Glossary, imported_at) thành dict dùng thông tin từ import_batches."""
+        gg, imported_at = row[0], row[1] if len(row) > 1 else None
+        d = gg.to_dict()
+        d["imported_at"] = imported_at
+        return d
     
     async def list(self, skip: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
-        """List global_glossary"""
-        query = select(Global_Glossary).offset(skip).limit(limit)
+        """List global_glossary, join import_batches để lấy imported_at."""
+        query = (
+            select(Global_Glossary, ImportBatch.created_at.label("imported_at"))
+            .select_from(Global_Glossary)
+            .outerjoin(ImportBatch, Global_Glossary.import_id == ImportBatch.id)
+            .offset(skip)
+            .limit(limit)
+        )
         result = await self.db.execute(query)
-        items = result.scalars().all()
-        return [item.to_dict() for item in items]
+        rows = result.all()
+        return [self._row_to_dict(row) for row in rows]
     
+    async def find_translation(self, term: str, language_pair: str) -> Optional[str]:
+        """Tìm bản dịch theo term và language_pair (exact match), trả về translated_term hoặc None."""
+        if not (term or "").strip() or not (language_pair or "").strip():
+            return None
+        result = await self.db.execute(
+            select(Global_Glossary.translated_term)
+            .where(
+                Global_Glossary.term == term.strip(),
+                Global_Glossary.language_pair == language_pair.strip(),
+                Global_Glossary.is_active == True,
+            )
+            .limit(1)
+        )
+        row = result.one_or_none()
+        return row[0] if row else None
+
     async def get(self, id: int) -> Optional[Dict[str, Any]]:
-        """Get global_glossary by ID"""
-        result = await self.db.execute(select(Global_Glossary).where(Global_Glossary.id == id))
-        item = result.scalar_one_or_none()
-        return item.to_dict() if item else None
+        """Get global_glossary by ID, kèm imported_at từ import_batches."""
+        result = await self.db.execute(
+            select(Global_Glossary, ImportBatch.created_at.label("imported_at"))
+            .select_from(Global_Glossary)
+            .outerjoin(ImportBatch, Global_Glossary.import_id == ImportBatch.id)
+            .where(Global_Glossary.id == id)
+        )
+        row = result.one_or_none()
+        if not row:
+            return None
+        return self._row_to_dict(row)
     
     async def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create global_glossary"""

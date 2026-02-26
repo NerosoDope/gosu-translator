@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useLanguagePairs, useDeleteLanguagePair } from '@/hooks/useLanguage';
+import { getLanguageNameVi } from '@/lib/languageNamesVi';
 
 // Types
 interface Language {
@@ -129,7 +130,7 @@ export default function LanguagePairTable({
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex items-center">
                     <span className="font-medium text-gray-900 dark:text-gray-100">
-                      {pair.source_language?.name}
+                      {pair.source_language ? getLanguageNameVi(pair.source_language.code, pair.source_language.name) : ''}
                     </span>
                     <span className="ml-2 text-gray-500 dark:text-gray-400">
                       ({pair.source_language?.code})
@@ -139,7 +140,7 @@ export default function LanguagePairTable({
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex items-center">
                     <span className="font-medium text-gray-900 dark:text-gray-100">
-                      {pair.target_language?.name}
+                      {pair.target_language ? getLanguageNameVi(pair.target_language.code, pair.target_language.name) : ''}
                     </span>
                     <span className="ml-2 text-gray-500 dark:text-gray-400">
                       ({pair.target_language?.code})

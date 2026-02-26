@@ -15,16 +15,36 @@ from app.modules.game.service import GameService
 router = APIRouter()
 
 
-@router.get("", response_model=List[GameResponse])
+@router.get("")
 async def list_game(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    skip: Optional[int] = Query(None, ge=0),
+    limit: Optional[int] = Query(None, ge=1, le=100),
+    page: Optional[int] = Query(None, ge=1),
+    per_page: Optional[int] = Query(None, ge=1, le=100),
     is_active: Optional[bool] = Query(None),
-    db: AsyncSession = Depends(get_db)
-) -> List[GameResponse]:
-    """List Game - Lấy danh sách"""
+    game_category_id: Optional[int] = Query(None, description="Lọc theo thể loại game"),
+    search: Optional[str] = Query(None, description="Tìm theo tên game"),
+    sort_by: str = Query("id", description="Sắp xếp theo cột"),
+    sort_order: str = Query("desc", description="asc | desc"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List Game - Lấy danh sách có lọc thể loại, tìm kiếm và phân trang."""
+    if page is not None and per_page is not None:
+        skip = (page - 1) * per_page
+        limit = per_page
+    else:
+        skip = skip if skip is not None else 0
+        limit = limit if limit is not None else 20
     service = GameService(db)
-    return await service.list(skip=skip, limit=limit, is_active=is_active)
+    return await service.list(
+        skip=skip,
+        limit=limit,
+        is_active=is_active,
+        game_category_id=game_category_id,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
 
 @router.get("/{id}", response_model=dict)

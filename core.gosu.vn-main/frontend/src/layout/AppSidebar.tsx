@@ -64,7 +64,7 @@ const AppSidebar: React.FC = () => {
   const { hasPermission, loading } = usePermissions();
   
   const [openSubmenu, setOpenSubmenu] = useState<{
-    type: "overview" | "user_management" | "translation" | "system";
+    type: "overview" | "user_management" | "translation_work" | "translation" | "system";
     index: number;
   } | null>(null);
   const [subMenuHeight, setSubMenuHeight] = useState<Record<string, number>>({});
@@ -133,6 +133,48 @@ const AppSidebar: React.FC = () => {
     
     return items;
   }, [hasPermission, loading]);
+
+  // DỊCH THUẬT (TRANSLATION - 4 modules chính)
+  const translationWorkItems: NavItem[] = useMemo(() => [
+    {
+      name: "Dịch Trực Tiếp",
+      path: "/translation/document",
+      icon: (
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+        </svg>
+      ),
+    },
+    {
+      name: "Dịch File",
+      path: "/translation/file",
+      icon: (
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      ),
+    },
+    {
+      name: "Jobs Của Tôi",
+      path: "/translation/my-jobs",
+      icon: (
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          <path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>
+        </svg>
+      ),
+    },
+    {
+      name: "Hiệu Đính",
+      path: "/translation/proofread",
+      icon: (
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+        </svg>
+      ),
+    },
+  ], []);
 
   // QUẢN LÝ DỊCH THUẬT (TRANSLATION MANAGEMENT)
   const translationItems: NavItem[] = useMemo(() => {
@@ -268,6 +310,11 @@ const AppSidebar: React.FC = () => {
       });
     }
 
+    sections.push({
+      title: "DỊCH THUẬT",
+      items: translationWorkItems,
+    });
+
     if (translationItems.length > 0) {
       sections.push({
         title: "QUẢN LÝ DỊCH THUẬT",
@@ -283,7 +330,7 @@ const AppSidebar: React.FC = () => {
     }
 
     return sections;
-  }, [overviewItems, userManagementItems, translationItems, systemItems]);
+  }, [overviewItems, userManagementItems, translationWorkItems, translationItems, systemItems]);
 
   const isActive = useCallback((path: string) => {
     if (path === pathname) return true;
@@ -296,7 +343,7 @@ const AppSidebar: React.FC = () => {
 
   const handleSubmenuToggle = (
     index: number,
-    menuType: "overview" | "user_management" | "translation" | "system"
+    menuType: "overview" | "user_management" | "translation_work" | "translation" | "system"
   ) => {
     setOpenSubmenu((prevOpenSubmenu) => {
       if (
@@ -316,6 +363,7 @@ const AppSidebar: React.FC = () => {
             const menuConfig = [
               { type: "overview" as const, items: overviewItems },
               { type: "user_management" as const, items: userManagementItems },
+              { type: "translation_work" as const, items: translationWorkItems },
               { type: "translation" as const, items: translationItems },
               { type: "system" as const, items: systemItems },
             ];
@@ -339,7 +387,7 @@ const AppSidebar: React.FC = () => {
 
     if (!submenuMatched) {
       // Don't close submenu if current pathname matches parent path
-      const allItems = [...overviewItems, ...userManagementItems, ...translationItems, ...systemItems];
+      const allItems = [...overviewItems, ...userManagementItems, ...translationWorkItems, ...translationItems, ...systemItems];
       const parentMatch = allItems.some(
         (item) => item.path && (pathname === item.path || pathname?.startsWith(item.path + "/"))
       );
@@ -347,7 +395,7 @@ const AppSidebar: React.FC = () => {
         setOpenSubmenu(null);
       }
     }
-  }, [pathname, overviewItems, userManagementItems, translationItems, systemItems]);
+  }, [pathname, overviewItems, userManagementItems, translationWorkItems, translationItems, systemItems]);
 
   useEffect(() => {
     if (openSubmenu !== null) {
@@ -363,7 +411,7 @@ const AppSidebar: React.FC = () => {
 
   const renderMenuItems = (
     navItems: NavItem[],
-    menuType: "overview" | "user_management" | "translation" | "system"
+    menuType: "overview" | "user_management" | "translation_work" | "translation" | "system"
   ) => (
     <ul className="flex flex-col gap-4">
       {navItems.map((nav, index) => (
@@ -502,6 +550,8 @@ const AppSidebar: React.FC = () => {
                   ? "overview"
                   : section.title === "QUẢN TRỊ NGƯỜI DÙNG"
                   ? "user_management"
+                  : section.title === "DỊCH THUẬT"
+                  ? "translation_work"
                   : section.title === "QUẢN LÝ DỊCH THUẬT"
                   ? "translation"
                   : "system";

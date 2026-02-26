@@ -76,7 +76,7 @@ services:
       GOSU_SECRET: ${GOSU_SECRET}
       DEBUG: ${DEBUG:-True}
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://192.168.90.239:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       SSL_VERIFY: ${SSL_VERIFY:-True}
     depends_on:
       postgres:

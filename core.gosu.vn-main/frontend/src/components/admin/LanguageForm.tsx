@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useCreateLanguage, useUpdateLanguage, useLanguageList } from '@/hooks/useLanguage';
 import { useToastContext } from '@/context/ToastContext';
+import { getLanguageNameVi } from '@/lib/languageNamesVi';
 
 // Types
 interface Language {
@@ -222,94 +223,6 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
   const { data: existingLanguages } = useLanguageList({ is_active: true });
   const toast = useToastContext();
 
-  // Vietnamese display names (properly capitalized) for common languages
-  const VI_DISPLAY_NAMES: Record<string, string> = {
-    en: 'Tiếng Anh',
-    vi: 'Tiếng Việt',
-    ja: 'Tiếng Nhật',
-    ko: 'Tiếng Hàn',
-    zh: 'Tiếng Trung',
-    fr: 'Tiếng Pháp',
-    de: 'Tiếng Đức',
-    es: 'Tiếng Tây Ban Nha',
-    pt: 'Tiếng Bồ Đào Nha',
-    ru: 'Tiếng Nga',
-    th: 'Tiếng Thái',
-    id: 'Tiếng Indonesia',
-    hi: 'Tiếng Hindi',
-    ar: 'Tiếng Ả Rập',
-    it: 'Tiếng Ý',
-    nl: 'Tiếng Hà Lan',
-    pl: 'Tiếng Ba Lan',
-    tr: 'Tiếng Thổ Nhĩ Kỳ',
-    sv: 'Tiếng Thụy Điển',
-    cs: 'Tiếng Séc',
-    ro: 'Tiếng Romania',
-    hu: 'Tiếng Hungary',
-    fi: 'Tiếng Phần Lan',
-    da: 'Tiếng Đan Mạch',
-    no: 'Tiếng Na Uy',
-    el: 'Tiếng Hy Lạp',
-    he: 'Tiếng Do Thái',
-    uk: 'Tiếng Ukraina',
-    ca: 'Tiếng Catalan',
-    sk: 'Tiếng Slovakia',
-    bg: 'Tiếng Bulgaria',
-    hr: 'Tiếng Croatia',
-    sr: 'Tiếng Serbia',
-    sl: 'Tiếng Slovenia',
-    et: 'Tiếng Estonia',
-    lv: 'Tiếng Latvia',
-    lt: 'Tiếng Lithuania',
-    mt: 'Tiếng Malta',
-    ga: 'Tiếng Ireland',
-    cy: 'Tiếng Wales',
-    is: 'Tiếng Iceland',
-    mk: 'Tiếng Macedonia',
-    sq: 'Tiếng Albania',
-    bs: 'Tiếng Bosnia',
-    ms: 'Tiếng Mã Lai',
-    sw: 'Tiếng Swahili',
-    af: 'Tiếng Afrikaans',
-    zu: 'Tiếng Zulu',
-    xh: 'Tiếng Xhosa',
-    yo: 'Tiếng Yoruba',
-    ig: 'Tiếng Igbo',
-    ha: 'Tiếng Hausa',
-    am: 'Tiếng Amharic',
-    bn: 'Tiếng Bengal',
-    gu: 'Tiếng Gujarat',
-    kn: 'Tiếng Kannada',
-    ml: 'Tiếng Malayalam',
-    mr: 'Tiếng Marathi',
-    ne: 'Tiếng Nepal',
-    pa: 'Tiếng Punjab',
-    si: 'Tiếng Sinhala',
-    ta: 'Tiếng Tamil',
-    te: 'Tiếng Telugu',
-    ur: 'Tiếng Urdu',
-    my: 'Tiếng Myanmar',
-    km: 'Tiếng Khmer',
-    lo: 'Tiếng Lào',
-    ka: 'Tiếng Gruzia',
-    hy: 'Tiếng Armenia',
-    az: 'Tiếng Azerbaijan',
-    kk: 'Tiếng Kazakhstan',
-    ky: 'Tiếng Kyrgyz',
-    uz: 'Tiếng Uzbek',
-    mn: 'Tiếng Mông Cổ',
-    bo: 'Tiếng Tây Tạng',
-    jv: 'Tiếng Java',
-    su: 'Tiếng Sunda',
-    ceb: 'Tiếng Cebuano',
-    tl: 'Tiếng Tagalog',
-    haw: 'Tiếng Hawaii',
-    mg: 'Tiếng Malagasy',
-    ny: 'Tiếng Chichewa',
-    st: 'Tiếng Sotho',
-    sn: 'Tiếng Shona',
-  };
-
   // Vietnamese aliases for searching (lowercase for matching)
   const VI_ALIASES: Record<string, string[]> = {
     en: ['tiếng anh', 'anh'],
@@ -329,10 +242,12 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
 
   const normalizedQuery = searchQuery.toLowerCase().trim();
 
-  // Filter languages based on search query (English, native name, code, and Vietnamese aliases)
+  // Filter languages based on search query (Vietnamese name, English, native name, code, and aliases)
   const filteredLanguages = ISO_LANGUAGES.filter(lang => {
     const aliases = VI_ALIASES[lang.code as keyof typeof VI_ALIASES] || [];
+    const nameVi = getLanguageNameVi(lang.code, lang.name);
     return (
+      nameVi.toLowerCase().includes(normalizedQuery) ||
       lang.name.toLowerCase().includes(normalizedQuery) ||
       lang.code.toLowerCase().includes(normalizedQuery) ||
       lang.nativeName.toLowerCase().includes(normalizedQuery) ||
@@ -353,7 +268,9 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
     if (value.length > 0) {
       const matched = ISO_LANGUAGES.find(lang => {
         const aliases = VI_ALIASES[lang.code as keyof typeof VI_ALIASES] || [];
+        const nameVi = getLanguageNameVi(lang.code, lang.name);
         return (
+          nameVi.toLowerCase() === lower ||
           lang.name.toLowerCase() === lower ||
           lang.nativeName.toLowerCase() === lower ||
           aliases.some(alias => alias.toLowerCase() === lower)
@@ -363,10 +280,11 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
       if (matched && !code) {
         setCode(matched.code);
         validateCode(matched.code);
-        // Auto-fill English name (original name) when matched via Vietnamese alias
-        if (VI_ALIASES[matched.code as keyof typeof VI_ALIASES]?.some(alias => alias.toLowerCase() === lower)) {
-          setName(matched.name);
-          setSearchQuery(matched.name);
+        // Auto-fill tên đã Việt hóa khi match theo tên Việt hoặc alias
+        const nameVi = getLanguageNameVi(matched.code, matched.name);
+        if (nameVi.toLowerCase() === lower || VI_ALIASES[matched.code as keyof typeof VI_ALIASES]?.some(alias => alias.toLowerCase() === lower)) {
+          setName(nameVi);
+          setSearchQuery(nameVi);
         }
       }
     }
@@ -374,15 +292,15 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
 
   // Handle suggestion selection
   const selectLanguage = (selectedLang: typeof ISO_LANGUAGES[0]) => {
-    // Always use English name (original name) for saving to database
-    setName(selectedLang.name);
+    const nameVi = getLanguageNameVi(selectedLang.code, selectedLang.name);
+    setName(nameVi);
     setCode(selectedLang.code);
-    setSearchQuery(selectedLang.name);
+    setSearchQuery(nameVi);
     setShowSuggestions(false);
     setCodeError('');
     setNameError('');
     validateCode(selectedLang.code);
-    validateName(selectedLang.name);
+    validateName(nameVi);
   };
 
   // Validation
@@ -435,13 +353,14 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
     setCode(value);
     validateCode(value);
 
-    // Try to auto-fill name when code is entered manually
+    // Try to auto-fill tên Việt hóa when code is entered manually
     if (value.length === 2 && !name) {
       const matched = ISO_LANGUAGES.find(lang => lang.code === value);
       if (matched) {
-        setName(matched.name);
-        setSearchQuery(matched.name);
-        validateName(matched.name);
+        const nameVi = getLanguageNameVi(matched.code, matched.name);
+        setName(nameVi);
+        setSearchQuery(nameVi);
+        validateName(nameVi);
       }
     }
   };
@@ -583,23 +502,15 @@ export default function LanguageForm({ language, onSuccess, onCancel }: Language
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-gray-900 dark:text-gray-100">
-                            {/* Hiển thị tên tiếng Anh (tên gốc) */}
-                            {lang.name}
+                            {getLanguageNameVi(lang.code, lang.name)}
                           </span>
                           <span className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
                             {lang.code.toUpperCase()}
                           </span>
                         </div>
                         <div className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
-                          {/* Hiển thị tên tiếng Việt nếu có, sau đó là tên bản địa */}
-                          {VI_DISPLAY_NAMES[lang.code] ? (
-                            <>
-                              <span className="font-medium">{VI_DISPLAY_NAMES[lang.code]}</span>
-                              {lang.nativeName !== lang.name && ` • ${lang.nativeName}`}
-                            </>
-                          ) : (
-                            lang.nativeName
-                          )}
+                          {lang.name}
+                          {lang.nativeName && lang.nativeName !== lang.name && ` • ${lang.nativeName}`}
                         </div>
                       </div>
                     </div>

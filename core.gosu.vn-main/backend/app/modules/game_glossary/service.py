@@ -29,6 +29,10 @@ class Game_GlossaryService:
         """List game_glossary"""
         return await self.repo.list(skip=skip, limit=limit, search=search, is_active=is_active, language_pair=language_pair, game_id=game_id, sort_by=sort_by, sort_order=sort_order)
     
+    async def find_translation(self, term: str, language_pair: str) -> Optional[str]:
+        """Tìm bản dịch theo term và language_pair (exact match)."""
+        return await self.repo.find_translation(term=term, language_pair=language_pair)
+
     async def get(self, id: int) -> Optional[Dict[str, Any]]:
         """Get game_glossary by ID"""
         return await self.repo.get(id)

@@ -33,6 +33,8 @@ import LanguagePairForm from '@/components/admin/LanguagePairForm';
 
 // API
 import { languageAPI } from '@/lib/api';
+import { getLanguageNameVi } from '@/lib/languageNamesVi';
+import { useToastContext } from '@/context/ToastContext';
 
 // Types
 type TabType = 'languages' | 'pairs';
@@ -89,6 +91,7 @@ interface LanguagePairListResponse {
 }
 
 export default function LanguagesPage() {
+  const toast = useToastContext();
   // State management
   const [activeTab, setActiveTab] = useState<TabType>('languages');
 
@@ -311,12 +314,13 @@ export default function LanguagesPage() {
   const handleRestoreLanguage = async (language: Language) => {
     try {
       await languageAPI.restore(language.id);
+      toast.success(`Đã khôi phục ngôn ngữ "${getLanguageNameVi(language.code, language.name)}".`);
       if (activeTab === 'languages') {
         loadLanguages();
       }
     } catch (error: any) {
       console.error('Error restoring language:', error);
-      // Could show error toast here
+      toast.error(error?.response?.data?.detail || 'Không thể khôi phục ngôn ngữ.');
     }
   };
 
@@ -402,7 +406,7 @@ export default function LanguagesPage() {
       sortable: true,
       render: (language: Language) => (
         <span className="text-gray-900 dark:text-gray-100 font-medium">
-          {language.name}
+          {getLanguageNameVi(language.code, language.name)}
         </span>
       ),
     },
@@ -542,7 +546,7 @@ export default function LanguagesPage() {
       render: (pair: LanguagePair) => (
         <div className="flex items-center gap-2">
           <span className="text-gray-900 dark:text-gray-100">
-            {pair.source_language.name}
+            {getLanguageNameVi(pair.source_language.code, pair.source_language.name)}
           </span>
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
             {pair.source_language.code.toUpperCase()}
@@ -557,7 +561,7 @@ export default function LanguagesPage() {
       render: (pair: LanguagePair) => (
         <div className="flex items-center gap-2">
           <span className="text-gray-900 dark:text-gray-100">
-            {pair.target_language.name}
+            {getLanguageNameVi(pair.target_language.code, pair.target_language.name)}
           </span>
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">
             {pair.target_language.code.toUpperCase()}
@@ -708,7 +712,7 @@ export default function LanguagesPage() {
               searchValue={search}
               onSearchChange={setSearch}
               filters={
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-4">
                   <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
@@ -718,6 +722,16 @@ export default function LanguagesPage() {
                     <option value="active">Hoạt động</option>
                     <option value="inactive">Tạm dừng</option>
                   </select>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={showDeleted}
+                      onChange={(e) => setShowDeleted(e.target.checked)}
+                      className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Hiển thị ngôn ngữ đã xóa</span>
+                  </label>
 
                   <select
                     value={pagination.per_page}
@@ -835,7 +849,7 @@ export default function LanguagesPage() {
                     </option>
                     {languages.map((lang: Language) => (
                       <option key={lang.id} value={lang.id}>
-                        {lang.name} ({lang.code.toUpperCase()})
+                        {getLanguageNameVi(lang.code, lang.name)} ({lang.code.toUpperCase()})
                       </option>
                     ))}
                   </select>
@@ -851,7 +865,7 @@ export default function LanguagesPage() {
                     </option>
                     {languages.map((lang: Language) => (
                       <option key={lang.id} value={lang.id}>
-                        {lang.name} ({lang.code.toUpperCase()})
+                        {getLanguageNameVi(lang.code, lang.name)} ({lang.code.toUpperCase()})
                       </option>
                     ))}
                   </select>
@@ -945,8 +959,8 @@ export default function LanguagesPage() {
                     Bạn có chắc chắn muốn xóa{' '}
                     <span className="font-medium text-gray-900 dark:text-gray-100">
                       {deleteTarget.type === 'language'
-                        ? `ngôn ngữ "${deleteTarget.item.name}" (${deleteTarget.item.code.toUpperCase()})`
-                        : `cặp ngôn ngữ "${deleteTarget.item.source_language.name} → ${deleteTarget.item.target_language.name}"`
+                        ? `ngôn ngữ "${getLanguageNameVi(deleteTarget.item.code, deleteTarget.item.name)}" (${deleteTarget.item.code.toUpperCase()})`
+                        : `cặp ngôn ngữ "${getLanguageNameVi(deleteTarget.item.source_language.code, deleteTarget.item.source_language.name)} → ${getLanguageNameVi(deleteTarget.item.target_language.code, deleteTarget.item.target_language.name)}"`
                       }
                     </span>
                     ?
