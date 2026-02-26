@@ -271,6 +271,7 @@ export const auditAPI = {
     resource_type?: string;
     start_date?: string;
     end_date?: string;
+    search?: string;
   }) => apiClient.get('/audit/logs', { params }),
 
   /**
