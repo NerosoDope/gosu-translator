@@ -6,6 +6,7 @@ import {
   useAvailableTargetLanguages
 } from '@/hooks/useLanguage';
 import { useToastContext } from '@/context/ToastContext';
+import { getLanguageNameVi } from '@/lib/languageNamesVi';
 
 // Types
 interface Language {
@@ -74,7 +75,6 @@ export default function LanguagePairForm({
         onSuccess();
       } else {
         if (!sourceLanguageId || !targetLanguageId) {
-          toast.error('Vui lòng chọn cả ngôn ngữ nguồn và ngôn ngữ đích');
           return;
         }
 
@@ -234,7 +234,7 @@ export default function LanguagePairForm({
           <div className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-800">
             <div className="flex items-center gap-2">
               <span className="font-medium text-gray-900 dark:text-gray-100">
-                {pair.source_language.name}
+                {getLanguageNameVi(pair.source_language.code, pair.source_language.name)}
               </span>
               <span className="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
                 {pair.source_language.code.toUpperCase()}
@@ -255,7 +255,7 @@ export default function LanguagePairForm({
               <option value="">Chọn ngôn ngữ nguồn</option>
               {languagesList.map((lang: Language) => (
                 <option key={lang.id} value={lang.id.toString()}>
-                  {lang.name} ({lang.code.toUpperCase()})
+                  {getLanguageNameVi(lang.code, lang.name)} ({lang.code.toUpperCase()})
                 </option>
               ))}
             </select>
@@ -277,7 +277,7 @@ export default function LanguagePairForm({
           <div className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-800">
             <div className="flex items-center gap-2">
               <span className="font-medium text-gray-900 dark:text-gray-100">
-                {pair.target_language.name}
+                {getLanguageNameVi(pair.target_language.code, pair.target_language.name)}
               </span>
               <span className="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
                 {pair.target_language.code.toUpperCase()}
@@ -301,7 +301,7 @@ export default function LanguagePairForm({
               </option>
               {targetOptions.map((lang: Language) => (
                 <option key={lang.id} value={lang.id.toString()}>
-                  {lang.name} ({lang.code.toUpperCase()})
+                  {getLanguageNameVi(lang.code, lang.name)} ({lang.code.toUpperCase()})
                 </option>
               ))}
             </select>

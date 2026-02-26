@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useCreateGlobal_glossary, useUpdateGlobal_glossary } from '@/hooks/useGlobal_glossary';
-import { gameCategoryAPI, languageAPI } from '@/lib/api'; // Import languageAPI
+import { gameCategoryAPI, languageAPI } from '@/lib/api';
+import { getLanguageNameVi } from '@/lib/languageNamesVi';
 import { useToastContext } from '@/context/ToastContext';
 
 // Types
@@ -27,6 +28,13 @@ interface Language {
   code: string;
 }
 
+interface LanguagePairItem {
+  id: number;
+  source_language: Language;
+  target_language: Language;
+  is_bidirectional?: boolean;
+}
+
 interface GlobalGlossaryFormProps {
   item?: GlobalGlossaryItem;
   onSuccess: () => void;
@@ -50,7 +58,9 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
 
   // Dropdown data
   const [gameCategories, setGameCategories] = useState<GameCategory[]>([]);
-  const [languages, setLanguages] = useState<Language[]>([]); // New state for languages
+  const [sourceLanguageOptions, setSourceLanguageOptions] = useState<Language[]>([]);
+  const [targetOptionsBySource, setTargetOptionsBySource] = useState<Record<string, Language[]>>({});
+  const [loadingLangAndPairs, setLoadingLangAndPairs] = useState(true);
 
   // Hooks
   const createGlobalGlossary = useCreateGlobal_glossary();
@@ -72,17 +82,46 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
     loadGameCategories();
   }, []);
 
-  // Load languages
+  // Load languages (nguồn = tất cả) + cặp ngôn ngữ (đích theo nguồn đã chọn)
   useEffect(() => {
-    const loadLanguages = async () => {
-      try {
-        const result = await languageAPI.getList({ per_page: 100, is_active: true });
-        setLanguages(result.data.items || []);
-      } catch (error) {
-        console.error('Failed to load languages in GlobalGlossaryForm:', error);
-      }
-    };
-    loadLanguages();
+    let mounted = true;
+    Promise.all([
+      languageAPI.getList({ limit: 100, is_active: true }),
+      languageAPI.getPairs({ limit: 100, is_active: true }),
+    ])
+      .then(([langRes, pairsRes]: any[]) => {
+        if (!mounted) return;
+        const langItems: Language[] = langRes?.data?.items ?? [];
+        const pairItems: LanguagePairItem[] = pairsRes?.data?.items ?? [];
+        setSourceLanguageOptions(langItems);
+        const bySource: Record<string, Language[]> = {};
+        for (const p of pairItems) {
+          const src = p.source_language;
+          const tgt = p.target_language;
+          if (!src?.code || !tgt?.code) continue;
+          if (!bySource[src.code]) bySource[src.code] = [];
+          if (!bySource[src.code].some((l) => l.code === tgt.code)) {
+            bySource[src.code].push({ id: tgt.id, code: tgt.code, name: tgt.name });
+          }
+          if (p.is_bidirectional) {
+            if (!bySource[tgt.code]) bySource[tgt.code] = [];
+            if (!bySource[tgt.code].some((l) => l.code === src.code)) {
+              bySource[tgt.code].push({ id: src.id, code: src.code, name: src.name });
+            }
+          }
+        }
+        setTargetOptionsBySource(bySource);
+      })
+      .catch(() => {
+        if (mounted) {
+          setSourceLanguageOptions([]);
+          setTargetOptionsBySource({});
+        }
+      })
+      .finally(() => {
+        if (mounted) setLoadingLangAndPairs(false);
+      });
+    return () => { mounted = false; };
   }, []);
 
   // Validation
@@ -112,9 +151,18 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
     return true;
   };
 
+  const targetOptions = targetOptionsBySource[sourceLanguage] ?? [];
+  const handleSourceLangChange = (newSource: string) => {
+    setSourceLanguage(newSource);
+    const allowed = targetOptionsBySource[newSource] ?? [];
+    const effectiveTarget = allowed.some((l) => l.code === targetLanguage) ? targetLanguage : (allowed[0]?.code ?? '');
+    setTargetLanguage(effectiveTarget);
+    validateLanguagePair(newSource, effectiveTarget);
+  };
+
   const validateLanguagePair = (source: string, target: string) => {
     if (!source || !target) {
-      setLanguagePairError('Cả ngôn ngữ nguồn và ngôn ngữ đích đều là bắt buộc');
+      setLanguagePairError('');
       return false;
     }
     if (source === target) {
@@ -295,22 +343,20 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
             Ngôn ngữ nguồn <span className="text-red-500">*</span>
           </label>
           <select
-            value={sourceLanguage}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-              setSourceLanguage(e.target.value);
-              validateLanguagePair(e.target.value, targetLanguage);
-            }}
+            value={sourceLanguageOptions.length > 0 ? sourceLanguage : ''}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleSourceLangChange(e.target.value)}
             className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${
               languagePairError
                 ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                 : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
             } dark:bg-gray-700 dark:text-gray-100`}
             required
+            disabled={loadingLangAndPairs}
           >
             <option value="">Chọn ngôn ngữ nguồn</option>
-            {languages.map(lang => (
+            {sourceLanguageOptions.map((lang) => (
               <option key={lang.id} value={lang.code}>
-                {lang.name}
+                {getLanguageNameVi(lang.code, lang.name)}
               </option>
             ))}
           </select>
@@ -327,7 +373,7 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
             Ngôn ngữ đích <span className="text-red-500">*</span>
           </label>
           <select
-            value={targetLanguage}
+            value={targetOptions.length > 0 ? targetLanguage : ''}
             onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
               setTargetLanguage(e.target.value);
               validateLanguagePair(sourceLanguage, e.target.value);
@@ -338,14 +384,20 @@ export default function GlobalGlossaryForm({ item, onSuccess, onCancel }: Global
                 : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
             } dark:bg-gray-700 dark:text-gray-100`}
             required
+            disabled={loadingLangAndPairs}
           >
             <option value="">Chọn ngôn ngữ đích</option>
-            {languages.map(lang => (
+            {targetOptions.map((lang) => (
               <option key={lang.id} value={lang.code}>
-                {lang.name}
+                {getLanguageNameVi(lang.code, lang.name)}
               </option>
             ))}
           </select>
+          {sourceLanguageOptions.length > 0 && sourceLanguage !== '' && targetOptions.length === 0 && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              Không có cặp dịch cho ngôn ngữ nguồn đã chọn. Vào Quản lý Ngôn ngữ → Cặp ngôn ngữ để tạo.
+            </p>
+          )}
           {languagePairError && (
             <p className="text-sm text-red-600 dark:text-red-400">
               {languagePairError}

@@ -1,18 +1,50 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+import io
+from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from .service import CacheService
 from .schemas import CacheCreate, CacheUpdate, CacheResponse
-from typing import List
+from typing import List, Optional
 
 router = APIRouter(tags=["Cache"])
 
-@router.get("", response_model=List[CacheResponse])
-@router.get("/", response_model=List[CacheResponse])
-async def list_cache(skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100), db: AsyncSession = Depends(get_db)):
+@router.get("")
+@router.get("/")
+async def list_cache(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    query: Optional[str] = Query(None, description="Tìm theo key"),
+    sort_by: str = Query("id", description="Sắp xếp theo cột"),
+    sort_order: str = Query("asc", description="asc | desc"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List cache với phân trang, tìm kiếm, sắp xếp. Trả về { items, total, page, per_page, pages }."""
     service = CacheService(db)
-    caches = await service.list(skip=skip, limit=limit)
-    return caches
+    return await service.list(
+        skip=skip, limit=limit, query=query, sort_by=sort_by, sort_order=sort_order
+    )
+
+
+@router.get("/export/excel")
+async def export_cache_excel(
+    query: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export danh sách cache ra file Excel."""
+    service = CacheService(db)
+    try:
+        excel_bytes = await service.export_excel(query=query)
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="openpyxl module is not installed on the server.",
+        )
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="cache_export.xlsx"'},
+    )
 
 @router.post("", response_model=CacheResponse)
 @router.post("/", response_model=CacheResponse)

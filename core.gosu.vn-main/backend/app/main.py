@@ -47,6 +47,7 @@ from app.modules.game_category import router as game_category_router
 from app.modules.game_glossary import router as game_glossary_router
 from app.modules.language import router as language_router
 from app.modules.job import router as job_router
+from app.modules.translate import router as translate_router
 from app.modules.global_glossary import router as global_glossary_router
 from app.modules.game import router as game_router
 from app.modules.import_batches import router as import_batches_router
@@ -73,7 +74,7 @@ cors_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",")
 if settings.DEBUG:
     cors_origins = list(dict.fromkeys([
         "http://localhost:3000",
-        "http://192.168.90.239:3000",
+        "http://192.168.90.239:3000"
     ] + (cors_origins or []))) 
 
 app.add_middleware(
@@ -110,6 +111,7 @@ app.include_router(global_glossary_router, prefix="/api/v1/global-glossary", tag
 app.include_router(game_router, prefix="/api/v1/game", tags=["game"])
 app.include_router(language_router, prefix="/api/v1/languages", tags=["languages"])
 app.include_router(job_router, prefix="/api/v1/job", tags=["job"])
+app.include_router(translate_router, prefix="/api/v1/translate", tags=["translate"])
 app.include_router(import_batches_router, prefix="/api/v1/import-batches", tags=["import-batches"])
 
 

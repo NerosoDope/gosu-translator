@@ -83,6 +83,15 @@ class LanguageRepository:
         result = await self.db.execute(select(Language).where(Language.id == id))
         return result.scalar_one_or_none()
 
+    async def get_by_code(self, code: str) -> Optional[Language]:
+        if not (code or "").strip():
+            return None
+        c = (code or "").strip()[:16]
+        result = await self.db.execute(
+            select(Language).where(and_(Language.code.ilike(c), Language.is_deleted.is_(False)))
+        )
+        return result.scalar_one_or_none()
+
     async def create(self, data: Dict[str, Any]) -> Language:
         try:
             item = Language(**data)

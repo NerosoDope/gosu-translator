@@ -51,6 +51,8 @@ interface GameGlossaryItem {
   game_id: number;
   usage_count: number;
   is_active: boolean;
+  import_id?: number | null;
+  imported_at?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -148,16 +150,21 @@ function GameContent() {
 
   const deleteGlossaryMutation = useDeleteGameGlossary();
 
-  // Sync data
+  // Sync data: useQuery.data = axios response; API body = axiosResponse.data (có thể là array hoặc { data, total, page, per_page, pages })
   useEffect(() => {
-    if (response) {
-      setItems(response.data || []);
-      setPagination(prev => ({
-        ...prev,
-        total: response.total || 0,
-        pages: response.pages || 0,
-      }));
-    }
+    const axiosResponse = response?.data;
+    if (axiosResponse === undefined) return;
+    const apiBody = axiosResponse?.data !== undefined ? axiosResponse.data : axiosResponse;
+    const body = Array.isArray(apiBody) ? { data: apiBody, total: apiBody.length, pages: 1 } : apiBody;
+    const list = body?.data ?? [];
+    setItems(list);
+    setPagination(prev => ({
+      ...prev,
+      total: body?.total ?? 0,
+      pages: body?.pages ?? 0,
+      ...(body?.page != null && { page: body.page }),
+      ...(body?.per_page != null && { per_page: body.per_page }),
+    }));
   }, [response]);
 
   // Sync glossary data
@@ -377,7 +384,7 @@ function GameContent() {
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
             {viewMode === 'games'
               ? 'Trung tâm quản lý các game trong hệ thống'
-              : `Trung tâm quản lý các thuật ngữ dịch thuật cho game ${selectedGameForGlossary.name}`
+              : `Trung tâm quản lý các thuật ngữ dịch thuật cho game ${selectedGameForGlossary?.name ?? ''}`
             }
           </p>
         </div>
@@ -594,15 +601,18 @@ function GameContent() {
       {/* Chi tiết thuật ngữ game (Read Modal) */}
       {showReadGlossaryModal && readingGlossaryItem && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[9999]"
           onClick={handleReadGlossaryModalClose}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="read-glossary-modal-title"
         >
           <div
             className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center p-6 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 z-10">
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Chi tiết thuật ngữ game</h3>
+              <h3 id="read-glossary-modal-title" className="text-xl font-semibold text-gray-900 dark:text-gray-100">Chi tiết thuật ngữ game</h3>
               <button
                 onClick={handleReadGlossaryModalClose}
                 className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
@@ -714,20 +724,37 @@ function GameContent() {
               <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-6">
                 <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
                   <svg className="w-5 h-5 mr-2 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  Thông tin thời gian
+                  Thông tin
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
                     <div className="flex items-center space-x-2 mb-2">
-                      <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7a2 2 0 010-2.828l7-7A1.994 1.994 0 0112 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7a2 2 0 010-2.828l7-7A1.994 1.994 0 0112 3z" />
                       </svg>
-                      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Ngày tạo</span>
+                      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Import ID</span>
                     </div>
                     <p className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                      {new Date(readingGlossaryItem.created_at).toLocaleString('vi-VN', {
+                      {readingGlossaryItem.import_id != null ? readingGlossaryItem.import_id : '—'}
+                    </p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                        {readingGlossaryItem.import_id != null ? 'Thời gian import' : 'Ngày tạo'}
+                      </span>
+                    </div>
+                    <p className="text-sm font-mono text-gray-900 dark:text-gray-100">
+                      {new Date(
+                        (readingGlossaryItem.import_id != null && readingGlossaryItem.imported_at)
+                          ? readingGlossaryItem.imported_at
+                          : readingGlossaryItem.created_at
+                      ).toLocaleString('vi-VN', {
                         year: 'numeric',
                         month: 'long',
                         day: 'numeric',
@@ -738,7 +765,7 @@ function GameContent() {
                     </p>
                   </div>
                   {readingGlossaryItem.updated_at && (
-                    <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                    <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-600 md:col-span-2">
                       <div className="flex items-center space-x-2 mb-2">
                         <svg className="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -763,6 +790,7 @@ function GameContent() {
           </div>
         </div>
       )}
+
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && deleteTarget && (

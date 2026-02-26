@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.modules.game_glossary.models import Game_Glossary
+from app.modules.import_batches.models import ImportBatch
 
 
 class Game_GlossaryRepository:
@@ -17,9 +18,18 @@ class Game_GlossaryRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
     
+    def _row_to_dict(self, row) -> Dict[str, Any]:
+        """Chuyển row (Game_Glossary, imported_at) thành dict dùng thông tin từ import_batches."""
+        gg, imported_at = row[0], row[1] if len(row) > 1 else None
+        d = gg.to_dict()
+        d["imported_at"] = imported_at  # Thời gian import từ import_batches.created_at
+        return d
+
     async def list(self, skip: int = 0, limit: int = 20, search: Optional[str] = None, is_active: Optional[bool] = None, language_pair: Optional[str] = None, game_id: Optional[int] = None, sort_by: Optional[str] = None, sort_order: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List game_glossary"""
-        query = select(Game_Glossary)
+        """List game_glossary, join import_batches để lấy imported_at."""
+        query = select(Game_Glossary, ImportBatch.created_at.label("imported_at")).select_from(
+            Game_Glossary
+        ).outerjoin(ImportBatch, Game_Glossary.import_id == ImportBatch.id)
 
         if search:
             query = query.where(Game_Glossary.term.ilike(f'%{search}%') | Game_Glossary.translated_term.ilike(f'%{search}%'))
@@ -29,7 +39,7 @@ class Game_GlossaryRepository:
             query = query.where(Game_Glossary.language_pair == language_pair)
         if game_id:
             query = query.where(Game_Glossary.game_id == game_id)
-        
+
         # Sorting
         if sort_by:
             sort_column = getattr(Game_Glossary, sort_by, None)
@@ -41,15 +51,37 @@ class Game_GlossaryRepository:
 
         query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
-        items = result.scalars().all()
-        return [item.to_dict() for item in items]
+        rows = result.all()
+        return [self._row_to_dict(row) for row in rows]
     
+    async def find_translation(self, term: str, language_pair: str) -> Optional[str]:
+        """Tìm bản dịch theo term và language_pair (exact match), trả về translated_term hoặc None."""
+        if not (term or "").strip() or not (language_pair or "").strip():
+            return None
+        result = await self.db.execute(
+            select(Game_Glossary.translated_term)
+            .where(
+                Game_Glossary.term == term.strip(),
+                Game_Glossary.language_pair == language_pair.strip(),
+                Game_Glossary.is_active == True,
+            )
+            .limit(1)
+        )
+        row = result.one_or_none()
+        return row[0] if row else None
+
     async def get(self, id: int) -> Optional[Dict[str, Any]]:
-        """Get game_glossary by ID"""
-        # TODO: Implement when model is created
-        result = await self.db.execute(select(Game_Glossary).where(Game_Glossary.id == id))
-        item = result.scalar_one_or_none()
-        return item.to_dict() if item else None
+        """Get game_glossary by ID, kèm imported_at từ import_batches."""
+        result = await self.db.execute(
+            select(Game_Glossary, ImportBatch.created_at.label("imported_at"))
+            .select_from(Game_Glossary)
+            .outerjoin(ImportBatch, Game_Glossary.import_id == ImportBatch.id)
+            .where(Game_Glossary.id == id)
+        )
+        row = result.one_or_none()
+        if not row:
+            return None
+        return self._row_to_dict(row)
     
     async def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create game_glossary"""

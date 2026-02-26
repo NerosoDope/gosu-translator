@@ -18,11 +18,14 @@ const apiClient = axios.create({
   },
 });
 
-// Request Interceptor - Tự động thêm JWT Token
+// Request Interceptor - Tự động thêm JWT Token; với FormData không set Content-Type để browser gửi đúng boundary
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    delete config.headers['Content-Type'];
   }
   return config;
 });
@@ -358,6 +361,8 @@ export const cacheAPI = {
   create: (data: any) => apiClient.post(`/cache/`, data),
   update: (id: number, data: any) => apiClient.put(`/cache/${id}/`, data),
   delete: (id: number) => apiClient.delete(`/cache/${id}/`),
+  exportExcel: (params?: { query?: string }) =>
+    apiClient.get(`/cache/export/excel`, { params, responseType: 'blob' }),
 };
 
 // Prompts API
@@ -437,6 +442,129 @@ export const jobAPI = {
   create: (data: any) => apiClient.post(`/job`, data),
   update: (id: number, data: any) => apiClient.put(`/job/${id}`, data),
   delete: (id: number) => apiClient.delete(`/job/${id}`),
+  exportExcel: (params?: { query?: string; status?: string; job_type?: string }) =>
+    apiClient.get(`/job/export/excel`, { params, responseType: 'blob' }),
+};
+
+// Translate API (AI)
+export const translateAPI = {
+  translate: (data: {
+    text: string;
+    source_lang: string;
+    target_lang: string;
+    prompt_id?: number | null;
+    context?: string | null;
+    style?: string | null;
+  }) => apiClient.post<{ translated_text: string }>('/translate', data),
+  /** Kiểm tra Gemini API key có hoạt động hay không (đọc từ Cài đặt) */
+  verifyApiKey: () => apiClient.get<{ ok: boolean; message: string }>('/translate/verify'),
+  /**
+   * Parse file Excel (.xlsx) hoặc CSV, trả về columns + preview_rows cho bước Chọn cột (Dịch file).
+   */
+  parseFile: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post<{ columns: string[]; preview_rows: Record<string, string>[] }>(
+      '/translate/parse-file',
+      formData
+    );
+  },
+  /**
+   * Dịch file: gửi file + cột chọn + ngôn ngữ, backend dịch từng ô (Cache -> Từ điển -> AI).
+   * Trả về columns (gốc + _translated) và rows.
+   */
+  translateFile: (params: {
+    file: File;
+    selected_columns: string[];
+    source_lang: string;
+    target_lang: string;
+    prompt_id?: number | null;
+    context?: string | null;
+    style?: string | null;
+  }) => {
+    const formData = new FormData();
+    formData.append('file', params.file);
+    formData.append('selected_columns', JSON.stringify(params.selected_columns));
+    formData.append('source_lang', params.source_lang);
+    formData.append('target_lang', params.target_lang);
+    if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
+    if (params.context != null && params.context !== '') formData.append('context', params.context);
+    if (params.style != null && params.style !== '') formData.append('style', params.style);
+    return apiClient.post<{ columns: string[]; rows: Record<string, string>[]; translated_json?: Record<string, unknown> | null }>(
+      '/translate/translate-file',
+      formData,
+      { timeout: 300000 }
+    );
+  },
+  /**
+   * Dịch file JSON giữ nguyên cấu trúc: chỉ dịch value string (Cache → Từ điển → AI).
+   * Trả về blob (application/json), tên file có _translated.
+   */
+  translateJsonFile: (params: {
+    file: File;
+    source_lang: string;
+    target_lang: string;
+    smart_filter?: boolean;
+    translate_keys?: boolean;
+    prompt_id?: number | null;
+    context?: string | null;
+    style?: string | null;
+  }) => {
+    const formData = new FormData();
+    formData.append('file', params.file);
+    formData.append('source_lang', params.source_lang);
+    formData.append('target_lang', params.target_lang);
+    formData.append('smart_filter', params.smart_filter !== false ? 'true' : 'false');
+    formData.append('translate_keys', params.translate_keys === true ? 'true' : 'false');
+    if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
+    if (params.context != null && params.context !== '') formData.append('context', params.context);
+    if (params.style != null && params.style !== '') formData.append('style', params.style);
+    return apiClient.post('/translate/translate-json-file', formData, {
+      responseType: 'blob',
+      timeout: 300000,
+    });
+  },
+  /**
+   * Dịch file XML giữ cấu trúc: chỉ dịch text trong thẻ (string, text, description...), giữ placeholder.
+   * Trả về blob (application/xml), tên file có _translated.
+   */
+  translateXmlFile: (params: {
+    file: File;
+    source_lang: string;
+    target_lang: string;
+    preserve_placeholders?: boolean;
+    respect_translatable?: boolean;
+    smart_filter?: boolean;
+    prompt_id?: number | null;
+    context?: string | null;
+    style?: string | null;
+  }) => {
+    const formData = new FormData();
+    formData.append('file', params.file);
+    formData.append('source_lang', params.source_lang);
+    formData.append('target_lang', params.target_lang);
+    formData.append('preserve_placeholders', params.preserve_placeholders !== false ? 'true' : 'false');
+    formData.append('respect_translatable', params.respect_translatable !== false ? 'true' : 'false');
+    formData.append('smart_filter', params.smart_filter !== false ? 'true' : 'false');
+    if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
+    if (params.context != null && params.context !== '') formData.append('context', params.context);
+    if (params.style != null && params.style !== '') formData.append('style', params.style);
+    return apiClient.post('/translate/translate-xml-file', formData, {
+      responseType: 'blob',
+      timeout: 300000,
+    });
+  },
+  /**
+   * Xuất kết quả dịch ra file theo đuôi (csv, xlsx, json, xml, docx).
+   * Trả về blob, frontend tải về với đuôi trùng file đã upload.
+   */
+  exportFile: (params: {
+    columns: string[];
+    rows: Record<string, string>[];
+    format: string;
+    filename?: string;
+  }) =>
+    apiClient.post('/translate/export-file', params, { responseType: 'blob' }),
 };
 
 // Asset API

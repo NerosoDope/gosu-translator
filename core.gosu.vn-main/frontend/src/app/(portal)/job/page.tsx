@@ -40,6 +40,7 @@ interface Job {
   status: string;
   priority: number;
   user_id: number;
+  creator_name?: string | null;
   team_id?: number;
   game_id?: number;
   game_genre?: string;
@@ -92,6 +93,10 @@ function JobPageContent() {
   const [sortBy, setSortBy] = useState<string>('id');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
+  // View detail modal
+  const [viewingJob, setViewingJob] = useState<Job | null>(null);
+  const [exporting, setExporting] = useState(false);
+
   // Load jobs
   const loadJobs = async () => {
     try {
@@ -113,21 +118,20 @@ function JobPageContent() {
 
       const response = await jobAPI.getList(params);
       const data = response.data;
-      
-      // Handle different response formats
-      if (Array.isArray(data)) {
+
+      if (data && typeof data === 'object' && Array.isArray(data.items)) {
+        setJobs(data.items);
+        setPagination({
+          ...pagination,
+          total: data.total ?? 0,
+          pages: data.pages ?? Math.ceil((data.total ?? 0) / pagination.per_page),
+        });
+      } else if (Array.isArray(data)) {
         setJobs(data);
         setPagination({
           ...pagination,
           total: data.length,
           pages: Math.ceil(data.length / pagination.per_page),
-        });
-      } else if (data.items) {
-        setJobs(data.items || []);
-        setPagination({
-          ...pagination,
-          total: data.total || 0,
-          pages: data.pages || 0,
         });
       } else {
         setJobs([]);
@@ -146,10 +150,29 @@ function JobPageContent() {
     loadJobs();
   }, [pagination.page, pagination.per_page, search, statusFilter, typeFilter, sortBy, sortOrder]);
 
-  // Event handlers
-  const handleJobCreate = () => {
-    setEditingJob(undefined);
-    setShowJobForm(true);
+  const handleExportExcel = async () => {
+    try {
+      setExporting(true);
+      const params: any = {};
+      if (search) params.query = search;
+      if (statusFilter) params.status = statusFilter;
+      if (typeFilter) params.job_type = typeFilter;
+      const res = await jobAPI.exportExcel(params);
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `jobs_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('Xuất Excel thành công!');
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || 'Không thể xuất file');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleJobEdit = (job: Job) => {
@@ -299,52 +322,52 @@ function JobPageContent() {
       ),
     },
     {
+      key: 'creator_name',
+      header: 'Người tạo',
+      sortable: false,
+      render: (job: Job) => (
+        <span className="text-gray-600 dark:text-gray-400">
+          {job.creator_name ?? '-'}
+        </span>
+      ),
+    },
+    {
       key: 'actions',
       header: 'Thao tác',
       sortable: false,
-      className: 'text-right',
+      className: 'text-left',
       render: (job: Job) => (
-        <div className="flex items-center gap-2 justify-end">
-          <button
-            onClick={() => handleJobEdit(job)}
-            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-            title="Chỉnh sửa"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+          <div className="flex items-center gap-2 justify-start">
+            <button
+              onClick={() => setViewingJob(job)}
+              className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
+              title="Xem chi tiết"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-              />
-            </svg>
-          </button>
-          <button
-            onClick={() => handleDeleteJob(job)}
-            className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-            title="Xóa"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => handleJobEdit(job)}
+              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+              title="Chỉnh sửa"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-              />
-            </svg>
-          </button>
-        </div>
-      ),
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => handleDeleteJob(job)}
+              className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+              title="Xóa"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+        ),
     },
   ];
 
@@ -357,11 +380,11 @@ function JobPageContent() {
             Quản Lý Jobs
           </h1>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Xem và quản lý danh sách jobs trong hệ thống
+            Xem, theo dõi tiến độ và quản lý các job dịch (job được tạo tự động khi dịch file)
           </p>
         </div>
-        <Button onClick={handleJobCreate}>
-          Thêm Job
+        <Button onClick={handleExportExcel} disabled={exporting}>
+          {exporting ? 'Đang xuất...' : 'Xuất Excel'}
         </Button>
       </div>
 
@@ -376,6 +399,7 @@ function JobPageContent() {
       <FilterBar
         searchValue={search}
         onSearchChange={setSearch}
+        searchPlaceholder="Tìm theo mã job..."
         filters={
           <div className="flex items-center gap-4">
             <select
@@ -423,7 +447,7 @@ function JobPageContent() {
         data={jobs}
         columns={jobColumns}
         isLoading={loading}
-        emptyMessage="Không tìm thấy jobs. Nhấn 'Thêm Job' để tạo job đầu tiên."
+        emptyMessage="Không tìm thấy jobs. Job được tạo tự động khi sử dụng chức năng dịch file."
         onSort={handleSort}
         sortColumn={sortBy}
         sortDirection={sortOrder === 'asc' ? 'asc' : sortOrder === 'desc' ? 'desc' : null}
@@ -448,7 +472,7 @@ function JobPageContent() {
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
               <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                {editingJob ? 'Chỉnh sửa job' : 'Thêm job mới'}
+                Chỉnh sửa job
               </h3>
               <button
                 onClick={handleJobFormCancel}
@@ -498,7 +522,7 @@ function JobPageContent() {
                   ?
                 </p>
                 <p className="text-xs text-red-600 dark:text-red-400 mt-2">
-                  Hành động này không thể hoàn tác.
+                  Hành động này không thể hoàn tác. Xóa job không làm mất dữ liệu gốc của file đã upload.
                 </p>
               </div>
 
@@ -516,6 +540,50 @@ function JobPageContent() {
                   Xóa
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Job Detail Modal */}
+      {viewingJob && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+              <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+                Chi tiết job: {viewingJob.job_code}
+              </h3>
+              <button
+                onClick={() => setViewingJob(null)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+                title="Đóng"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div><span className="text-gray-500 dark:text-gray-400">Mã job:</span> <span className="font-medium">{viewingJob.job_code}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Loại:</span> <span className="font-medium">{viewingJob.job_type}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Trạng thái:</span> <span className="font-medium">{viewingJob.status}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Tiến độ:</span> <span className="font-medium">{viewingJob.progress ?? 0}%</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Độ ưu tiên:</span> <span className="font-medium">{viewingJob.priority}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Người tạo:</span> <span className="font-medium">{viewingJob.creator_name ?? '-'}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Ngôn ngữ nguồn:</span> <span className="font-medium">{viewingJob.source_lang ?? '-'}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Ngôn ngữ đích:</span> <span className="font-medium">{viewingJob.target_lang ?? '-'}</span></div>
+                <div><span className="text-gray-500 dark:text-gray-400">Ngày tạo:</span> <span className="font-medium">{viewingJob.created_at ? new Date(viewingJob.created_at).toLocaleString() : '-'}</span></div>
+              </div>
+              {viewingJob.error_message && (
+                <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300">
+                  <span className="font-medium">Lỗi:</span> {viewingJob.error_message}
+                </div>
+              )}
+              {viewingJob.payload && Object.keys(viewingJob.payload).length > 0 && (
+                <div>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Payload:</span>
+                  <pre className="mt-1 p-3 bg-gray-100 dark:bg-gray-700 rounded text-xs overflow-x-auto">{JSON.stringify(viewingJob.payload, null, 2)}</pre>
+                </div>
+              )}
             </div>
           </div>
         </div>
