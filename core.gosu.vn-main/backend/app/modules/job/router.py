@@ -5,7 +5,9 @@ Author: GOSU Development Team
 Version: 1.0.0
 """
 
+import io
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from app.db.session import get_db
@@ -15,15 +17,54 @@ from app.modules.job.service import JobService
 router = APIRouter()
 
 
-@router.get("", response_model=List[dict])
+@router.get("")
 async def list_job(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db)
+    query: Optional[str] = Query(None, description="Tìm theo mã job"),
+    status: Optional[str] = Query(None, description="Lọc theo trạng thái"),
+    job_type: Optional[str] = Query(None, description="Lọc theo loại job"),
+    user_id: Optional[int] = Query(None, description="Lọc theo người tạo (Jobs của tôi)"),
+    sort_by: str = Query("id", description="Sắp xếp theo cột"),
+    sort_order: str = Query("asc", description="asc | desc"),
+    db: AsyncSession = Depends(get_db),
 ):
-    """List Job - Lấy danh sách"""
+    """List Job - Lấy danh sách có phân trang, tìm kiếm, lọc."""
     service = JobService(db)
-    return await service.list(skip=skip, limit=limit)
+    return await service.list(
+        skip=skip,
+        limit=limit,
+        query=query,
+        status=status,
+        job_type=job_type,
+        user_id=user_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+
+@router.get("/export/excel")
+async def export_job_excel(
+    query: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    job_type: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export danh sách job ra file Excel."""
+    service = JobService(db)
+    try:
+        excel_bytes = await service.export_excel(query=query, status=status, job_type=job_type, user_id=user_id)
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="openpyxl module is not installed on the server.",
+        )
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="jobs_export.xlsx"'},
+    )
 
 
 @router.get("/{id}", response_model=dict)

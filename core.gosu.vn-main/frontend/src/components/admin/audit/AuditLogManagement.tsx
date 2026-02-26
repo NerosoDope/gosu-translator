@@ -229,12 +229,7 @@ function AuditLogManagementContent() {
     },
   ];
 
-  // Paginate logs
-  const paginatedLogs = logs.slice(
-    pagination.skip,
-    pagination.skip + pagination.limit
-  );
-
+  // API đã trả về đúng trang theo skip/limit, không slice lại trên client
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -284,7 +279,7 @@ function AuditLogManagementContent() {
       />
 
       <DataTable
-        data={paginatedLogs}
+        data={logs}
         columns={columns}
         isLoading={loading}
         emptyMessage="Không tìm thấy audit log nào."

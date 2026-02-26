@@ -7,7 +7,7 @@ from typing import List, Optional
 
 router = APIRouter(tags=["GameCategory"])
 
-@router.get("/", response_model=GameCategoryListResponse)
+@router.get("", response_model=GameCategoryListResponse)
 async def list_game_categories(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -24,7 +24,7 @@ async def get_game_category(id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Game category not found")
     return item
 
-@router.post("/", response_model=GameCategoryResponse)
+@router.post("", response_model=GameCategoryResponse)
 async def create_game_category(data: GameCategoryCreate, db: AsyncSession = Depends(get_db)):
     service = GameCategoryService(db)
     return await service.create(data.model_dump())

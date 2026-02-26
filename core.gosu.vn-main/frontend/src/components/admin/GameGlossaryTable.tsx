@@ -10,6 +10,8 @@ interface GameGlossaryItem {
   game_id: number;
   usage_count: number;
   is_active: boolean;
+  import_id?: number | null;
+  imported_at?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -120,13 +122,18 @@ export default function GameGlossaryTable({
       key: 'actions',
       header: 'Thao tác',
       sortable: false,
-      className: 'text-right',
+      className: 'text-left',
       render: (item: GameGlossaryItem) => (
         <div className="flex items-center gap-2">
           <button
-            onClick={() => onRead(item)}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRead(item);
+            }}
             className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 transition-colors duration-200"
-            title="Xem trước thuật ngữ"
+            title="Xem chi tiết thuật ngữ"
           >
             <svg
               className="w-5 h-5"

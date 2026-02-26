@@ -5,7 +5,9 @@ Author: GOSU Development Team
 Version: 1.0.0
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+import io
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from app.db.session import get_db
@@ -24,6 +26,64 @@ async def list_global_glossary(
     """List Global_Glossary - Lấy danh sách"""
     service = Global_GlossaryService(db)
     return await service.list(skip=skip, limit=limit)
+
+
+# Literal paths (all, upload-excel, export/excel) must be before /{id} to avoid "all" matched as id
+@router.delete("/all", status_code=status.HTTP_200_OK)
+async def delete_all_global_glossary(
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete ALL global glossary entries. Trả về số bản ghi đã xoá."""
+    service = Global_GlossaryService(db)
+    count = await service.delete_all()
+    return {"deleted_count": count}
+
+
+@router.post("/upload-excel", response_model=ExcelUploadResponse)
+async def upload_excel_global_glossary(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Upload Excel file để import Global Glossary
+
+    Excel format:
+    - Row 1: Header (term, translated_term, language_pair, game_category_id (optional), usage_count (optional), is_active (optional))
+    - Row 2+: Data rows
+
+    Returns:
+        ExcelUploadResponse với thông tin kết quả upload
+    """
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be Excel format (.xlsx or .xls)"
+        )
+    service = Global_GlossaryService(db)
+    result = await service.upload_excel(file)
+    return ExcelUploadResponse(**result)
+
+
+@router.get("/export/excel")
+async def export_excel_global_glossary(
+    db: AsyncSession = Depends(get_db),
+):
+    """Export toàn bộ Global Glossary ra file Excel (.xlsx)."""
+    service = Global_GlossaryService(db)
+    try:
+        excel_bytes = await service.export_excel()
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="openpyxl module is not installed on the server.",
+        )
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="global_glossary_export.xlsx"'
+        },
+    )
 
 
 @router.get("/{id}", response_model=Global_GlossaryResponse)

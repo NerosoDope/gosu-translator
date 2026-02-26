@@ -75,16 +75,6 @@ export default function GameTable({ items, loading, error, pagination, gameCateg
       ),
     },
     {
-      key: 'description',
-      header: 'Mô tả',
-      sortable: true,
-      render: (item: GameItem) => (
-        <span className="text-sm text-gray-600 dark:text-gray-400">
-          {item.description || 'N/A'}
-        </span>
-      ),
-    },
-    {
       key: 'game_category_id',
       header: 'Thể loại',
       sortable: true,

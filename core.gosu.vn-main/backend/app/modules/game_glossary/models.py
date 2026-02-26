@@ -20,6 +20,7 @@ class Game_Glossary(Base):
     language_pair = Column(String(50), nullable=False)
     usage_count = Column(Integer, default=0)
     game_id = Column(BigInteger, ForeignKey("games.id"))
+    import_id = Column(BigInteger, ForeignKey("import_batches.id", ondelete="SET NULL"), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -31,6 +32,7 @@ class Game_Glossary(Base):
         """Convert to dict"""
         return {
             "id": self.id,
+            "import_id": self.import_id,
             "term": self.term,
             "translated_term": self.translated_term,
             "language_pair": self.language_pair,

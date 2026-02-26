@@ -37,6 +37,13 @@ class LanguageService:
             raise HTTPException(status_code=404, detail="Language not found")
         return language
 
+    async def get_name_by_code(self, code: str) -> str:
+        """Trả về tên ngôn ngữ theo mã (từ bảng languages). Không tìm thấy thì trả về code."""
+        if not (code or "").strip():
+            return (code or "").strip()
+        lang = await self.repo.get_by_code(code)
+        return (lang.name or code).strip() if lang else (code or "").strip()
+
     async def get_language_with_pairs_count(self, id: int):
         result = await self.repo.get_with_pairs_count(id)
         if not result:

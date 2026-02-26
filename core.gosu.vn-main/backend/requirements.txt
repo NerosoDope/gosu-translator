@@ -25,9 +25,18 @@ aioredis==2.0.1
 minio==7.2.0
 aiofiles==23.2.1
 
+# Excel Processing
+openpyxl==3.1.2
+
+# Word DOCX
+python-docx==1.1.0
+
 # HTTP Client
 httpx==0.25.2
 aiohttp==3.9.1
+
+# AI / Translation (Gemini)
+google-genai>=1.0.0
 
 # Validation & Serialization
 pydantic==2.5.0

@@ -21,7 +21,7 @@
 
 import React, { useState, useEffect } from "react";
 import Button from "@/components/ui/Button";
-import { settingsAPI } from "@/lib/api";
+import { settingsAPI, translateAPI } from "@/lib/api";
 import { useToastContext } from "@/context/ToastContext";
 import { usePermissions } from "@/lib/rbac";
 
@@ -219,10 +219,10 @@ const DEFAULT_SETTINGS: Record<string, Omit<Setting, "id" | "created_at" | "upda
   ],
   integration: [
     {
-      key: "openai_api_key",
+      key: "gemini_api_key",
       category: "integration",
-      name: "OpenAI API Key",
-      description: "API key cho OpenAI (sk-...)",
+      name: "Gemini API Key",
+      description: "API key cho Google Gemini (lấy tại https://aistudio.google.com/apikey)",
       value: "",
       type: "string",
       is_encrypted: true,
@@ -231,11 +231,11 @@ const DEFAULT_SETTINGS: Record<string, Omit<Setting, "id" | "created_at" | "upda
       order: 1,
     },
     {
-      key: "openai_model",
+      key: "gemini_model",
       category: "integration",
-      name: "OpenAI Model",
-      description: "Model OpenAI mặc định (ví dụ: gpt-4, gpt-3.5-turbo)",
-      value: "gpt-3.5-turbo",
+      name: "Gemini Model",
+      description: "Model Gemini mặc định (ví dụ: gemini-2.5-flash-lite, gemini-2.0-flash)",
+      value: "gemini-2.5-flash-lite",
       type: "string",
       is_encrypted: false,
       is_public: false,
@@ -306,10 +306,29 @@ function SettingsManagementContent() {
   const [selectedCategory, setSelectedCategory] = useState<string>("general");
   const [editingSettings, setEditingSettings] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
     loadSettings();
   }, [selectedCategory]);
+
+  const handleVerifyApiKey = async () => {
+    setVerifying(true);
+    try {
+      const res = await translateAPI.verifyApiKey();
+      const data = res.data;
+      if (data?.ok) {
+        toast.success(data.message || "API key hợp lệ.");
+      } else {
+        toast.error(data?.message || "API key không hợp lệ hoặc chưa cấu hình.");
+      }
+    } catch (err: any) {
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : err.message || "Không thể kiểm tra API key.");
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -564,6 +583,17 @@ function SettingsManagementContent() {
               {categoryInfo?.label}
             </h2>
           </div>
+
+          {selectedCategory === "integration" && (
+            <div className="mb-6 p-4 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                Kiểm tra Gemini API key đã cấu hình có hoạt động hay không.
+              </p>
+              <Button type="button" variant="secondary" onClick={handleVerifyApiKey} disabled={verifying}>
+                {verifying ? "Đang kiểm tra..." : "Kiểm tra API key"}
+              </Button>
+            </div>
+          )}
 
           {categorySettings.length === 0 ? (
             <div className="text-center py-8 text-gray-500 dark:text-gray-400">

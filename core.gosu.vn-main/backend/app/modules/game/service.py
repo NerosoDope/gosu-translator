@@ -17,9 +17,35 @@ class GameService:
         self.db = db
         self.repo = GameRepository(db)
     
-    async def list(self, skip: int = 0, limit: int = 20, is_active: Optional[bool] = None) -> List[Dict[str, Any]]:
-        """List game"""
-        return await self.repo.list(skip=skip, limit=limit, is_active=is_active)
+    async def list(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        is_active: Optional[bool] = None,
+        game_category_id: Optional[int] = None,
+        search: Optional[str] = None,
+        sort_by: str = "id",
+        sort_order: str = "desc",
+    ) -> Dict[str, Any]:
+        """List game với lọc và phân trang. Trả về { data, total, page, per_page, pages }."""
+        items, total = await self.repo.list(
+            skip=skip,
+            limit=limit,
+            is_active=is_active,
+            game_category_id=game_category_id,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        pages = (total + limit - 1) // limit if limit else 0
+        page = (skip // limit) + 1 if limit else 1
+        return {
+            "data": items,
+            "total": total,
+            "page": page,
+            "per_page": limit,
+            "pages": pages,
+        }
     
     async def get(self, id: int) -> Optional[Dict[str, Any]]:
         """Get game by ID"""
