@@ -80,3 +80,7 @@ class CacheService:
 
     async def delete(self, id: int):
         return await self.repo.delete(id)
+
+    async def cleanup_expired(self) -> int:
+        """Xóa toàn bộ cache entries đã hết TTL. Trả về số bản ghi bị xóa."""
+        return await self.repo.delete_expired()

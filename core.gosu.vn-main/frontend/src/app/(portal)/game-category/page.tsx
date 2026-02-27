@@ -12,7 +12,6 @@ interface GameCategory {
   id: number;
   name: string;
   description: string;
-  translation_style: string;
   is_active: boolean;
 }
 
@@ -43,7 +42,7 @@ export default function GameCategoryPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('id');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Load game categories
   const loadGameCategories = async () => {
@@ -162,7 +161,7 @@ export default function GameCategoryPage() {
     if (!columnKey || !direction) {
       // If columnKey or direction is null, reset to default sort
       setSortBy('id');
-      setSortOrder('asc');
+      setSortOrder('desc');
     } else {
       // Set new sort column and direction
       setSortBy(columnKey);

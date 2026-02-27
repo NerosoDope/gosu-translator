@@ -33,12 +33,18 @@ class Job(Base):
     result = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=True, onupdate=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
-    
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+
     def __repr__(self):
         return f"<Job(id={self.id}, job_code={self.job_code})>"
-    
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
     def to_dict(self):
         """Convert to dict"""
         return {
@@ -60,6 +66,9 @@ class Job(Base):
             "result": self.result,
             "error_message": self.error_message,
             "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "deleted_at": self.deleted_at,
+            "is_deleted": self.deleted_at is not None,
         }

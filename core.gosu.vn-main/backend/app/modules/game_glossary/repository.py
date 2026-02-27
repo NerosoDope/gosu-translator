@@ -54,18 +54,23 @@ class Game_GlossaryRepository:
         rows = result.all()
         return [self._row_to_dict(row) for row in rows]
     
-    async def find_translation(self, term: str, language_pair: str) -> Optional[str]:
-        """Tìm bản dịch theo term và language_pair (exact match), trả về translated_term hoặc None."""
+    async def find_translation(
+        self, term: str, language_pair: str, game_id: Optional[int] = None
+    ) -> Optional[str]:
+        """Tìm bản dịch theo term và language_pair (exact match), trả về translated_term hoặc None.
+        Nếu game_id được chỉ định, chỉ tra trong từ điển của game đó.
+        """
         if not (term or "").strip() or not (language_pair or "").strip():
             return None
+        conditions = [
+            Game_Glossary.term == term.strip(),
+            Game_Glossary.language_pair == language_pair.strip(),
+            Game_Glossary.is_active == True,
+        ]
+        if game_id is not None:
+            conditions.append(Game_Glossary.game_id == game_id)
         result = await self.db.execute(
-            select(Game_Glossary.translated_term)
-            .where(
-                Game_Glossary.term == term.strip(),
-                Game_Glossary.language_pair == language_pair.strip(),
-                Game_Glossary.is_active == True,
-            )
-            .limit(1)
+            select(Game_Glossary.translated_term).where(*conditions).limit(1)
         )
         row = result.one_or_none()
         return row[0] if row else None
