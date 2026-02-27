@@ -130,7 +130,7 @@ export default function LanguagesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [showDeleted, setShowDeleted] = useState(false);
   const [sortBy, setSortBy] = useState<string>('id');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // Language pairs state
   const [languagePairs, setLanguagePairs] = useState<LanguagePair[]>([]);
@@ -358,16 +358,16 @@ export default function LanguagesPage() {
     if (columnKey === null) {
       // Clear sorting
       setSortBy('id');
-      setSortOrder('asc');
+      setSortOrder('desc');
     } else if (sortBy === columnKey) {
       // Toggle sort order
       if (direction === 'asc') {
         setSortOrder('desc');
       } else if (direction === 'desc') {
         setSortBy('id');
-        setSortOrder('asc');
+        setSortOrder('desc');
       } else {
-        setSortOrder('asc');
+        setSortOrder('desc');
       }
     } else {
       // Set new sort column with specified direction

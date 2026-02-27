@@ -2,10 +2,12 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
+CACHE_DEFAULT_TTL = 86400  # 1 ngày (giây)
+
 class CacheBase(BaseModel):
     key: str
     value: str
-    ttl: Optional[int] = None
+    ttl: Optional[int] = CACHE_DEFAULT_TTL
 
 class CacheCreate(CacheBase):
     pass

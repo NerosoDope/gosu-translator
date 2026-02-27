@@ -31,7 +31,7 @@ function CachePageContent() {
   });
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<string>('id');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [exporting, setExporting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<CacheItem | null>(null);
@@ -81,13 +81,13 @@ function CachePageContent() {
   const handleSort = (columnKey: string | null, direction: 'asc' | 'desc' | null) => {
     if (columnKey == null) {
       setSortBy('id');
-      setSortOrder('asc');
+      setSortOrder('desc');
     } else if (sortBy === columnKey) {
       if (direction === 'asc') setSortOrder('desc');
       else if (direction === 'desc') {
         setSortBy('id');
-        setSortOrder('asc');
-      } else setSortOrder('asc');
+        setSortOrder('desc');
+      } else setSortOrder('desc');
     } else {
       setSortBy(columnKey);
       setSortOrder(direction === 'desc' ? 'desc' : 'asc');

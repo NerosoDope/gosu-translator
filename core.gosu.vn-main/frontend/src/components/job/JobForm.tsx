@@ -11,14 +11,14 @@ export interface JobFormJob {
   status: string;
   priority: number;
   progress?: number;
-  user_id?: number;
-  team_id?: number;
-  game_id?: number;
-  source_lang?: string;
-  target_lang?: string;
-  error_message?: string;
-  created_at?: string;
-  updated_at?: string;
+  user_id?: number | null;
+  team_id?: number | null;
+  game_id?: number | null;
+  source_lang?: string | null;
+  target_lang?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 interface JobFormProps {
@@ -27,17 +27,25 @@ interface JobFormProps {
   onCancel: () => void;
 }
 
-const JOB_STATUSES = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'cancelled', label: 'Cancelled' },
-];
+const ALL_STATUSES: Record<string, string> = {
+  pending:     'Chờ xử lý',
+  in_progress: 'Đang xử lý',
+  completed:   'Hoàn thành',
+  failed:      'Thất bại',
+  cancelled:   'Đã hủy',
+};
+
+/** Các trạng thái có thể chuyển sang từ trạng thái hiện tại (theo state machine). */
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending:     ['pending', 'in_progress', 'cancelled'],
+  in_progress: ['in_progress', 'completed', 'failed', 'cancelled'],
+  completed:   ['completed'],  // terminal
+  failed:      ['failed', 'pending'],
+  cancelled:   ['cancelled', 'pending'],
+};
 
 export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
   const [status, setStatus] = useState(job?.status ?? 'pending');
-  const [priority, setPriority] = useState(job?.priority ?? 5);
   const [progress, setProgress] = useState(job?.progress ?? 0);
   const [progressError, setProgressError] = useState('');
 
@@ -47,7 +55,6 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
   useEffect(() => {
     if (job) {
       setStatus(job.status);
-      setPriority(job.priority);
       setProgress(job.progress ?? 0);
     }
   }, [job]);
@@ -72,7 +79,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
     try {
       await updateJob.mutateAsync({
         id: job.id,
-        data: { status, priority, progress },
+        data: { status, progress },
       });
       toast.success('Cập nhật job thành công!');
       onSuccess();
@@ -120,27 +127,21 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
           id="status"
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+          disabled={job.status === 'completed'}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {JOB_STATUSES.map((s) => (
-            <option key={s.value} value={s.value}>{s.label}</option>
+          {(VALID_TRANSITIONS[job.status] ?? [job.status]).map((s) => (
+            <option key={s} value={s}>
+              {ALL_STATUSES[s] ?? s}
+              {s === job.status ? ' (hiện tại)' : ''}
+            </option>
           ))}
         </select>
-      </div>
-
-      <div>
-        <label htmlFor="priority" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Độ ưu tiên
-        </label>
-        <input
-          type="number"
-          id="priority"
-          min={0}
-          max={10}
-          value={priority}
-          onChange={(e) => setPriority(Number(e.target.value))}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-        />
+        {job.status === 'completed' && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            Job đã hoàn thành — không thể thay đổi trạng thái.
+          </p>
+        )}
       </div>
 
       <div>

@@ -23,6 +23,7 @@ Xem thêm:
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
@@ -48,6 +49,7 @@ async def get_audit_logs(
     resource_type: Optional[str] = Query(None),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
+    search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_permission("audit:read"))
 ):
@@ -69,9 +71,10 @@ async def get_audit_logs(
         resource_type=resource_type,
         start_date=start_date,
         end_date=end_date,
+        search=search,
     )
-    
-    # Get total count
+
+    # Get total count (cùng bộ filter để phân trang đúng)
     total = await service.count_logs(
         user_id=user_id,
         module=module,
@@ -79,6 +82,7 @@ async def get_audit_logs(
         resource_type=resource_type,
         start_date=start_date,
         end_date=end_date,
+        search=search,
     )
     
     # Convert to response format

@@ -25,6 +25,7 @@ Xem thêm:
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
+from sqlalchemy.orm import selectinload
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from app.modules.audit.models import AuditLog
@@ -87,10 +88,11 @@ class AuditService:
         resource_type: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        search: Optional[str] = None,
     ) -> List[AuditLog]:
         """
         Get Logs - Query audit logs với filters
-        
+
         Args:
             skip: Pagination offset
             limit: Pagination limit
@@ -100,12 +102,13 @@ class AuditService:
             resource_type: Filter by resource type
             start_date: Filter by start date
             end_date: Filter by end date
-        
+            search: Tìm trong action, module, resource_type (ILIKE)
+
         Returns:
             List[AuditLog]: List of audit logs
         """
-        query = select(AuditLog)
-        
+        query = select(AuditLog).options(selectinload(AuditLog.user))
+
         # Apply filters
         conditions = []
         if user_id:
@@ -120,10 +123,19 @@ class AuditService:
             conditions.append(AuditLog.created_at >= start_date)
         if end_date:
             conditions.append(AuditLog.created_at <= end_date)
-        
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            conditions.append(
+                or_(
+                    AuditLog.action.ilike(term),
+                    AuditLog.module.ilike(term),
+                    AuditLog.resource_type.ilike(term),
+                )
+            )
+
         if conditions:
             query = query.where(and_(*conditions))
-        
+
         # Order by created_at desc
         query = query.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit)
         
@@ -138,19 +150,20 @@ class AuditService:
         resource_type: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        search: Optional[str] = None,
     ) -> int:
         """
         Count Logs - Đếm số lượng audit logs với filters
-        
+
         Args:
             Same as get_logs
-        
+
         Returns:
             int: Total count
         """
         query = select(func.count(AuditLog.id))
-        
-        # Apply filters
+
+        # Apply filters (cùng điều kiện với get_logs)
         conditions = []
         if user_id:
             conditions.append(AuditLog.user_id == user_id)
@@ -164,10 +177,19 @@ class AuditService:
             conditions.append(AuditLog.created_at >= start_date)
         if end_date:
             conditions.append(AuditLog.created_at <= end_date)
-        
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            conditions.append(
+                or_(
+                    AuditLog.action.ilike(term),
+                    AuditLog.module.ilike(term),
+                    AuditLog.resource_type.ilike(term),
+                )
+            )
+
         if conditions:
             query = query.where(and_(*conditions))
-        
+
         result = await self.db.execute(query)
         return result.scalar() or 0
 

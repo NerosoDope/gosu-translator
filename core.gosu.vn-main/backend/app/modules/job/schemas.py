@@ -62,7 +62,11 @@ class JobResponse(JobBase):
     id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
-    creator_name: Optional[str] = None  # Tên người tạo job (từ users.full_name)
-    
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+    is_deleted: bool = False
+    creator_name: Optional[str] = None
+
     class Config:
         from_attributes = True

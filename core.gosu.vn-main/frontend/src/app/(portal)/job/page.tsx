@@ -18,7 +18,7 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 
 // Components
@@ -41,19 +41,23 @@ interface Job {
   priority: number;
   user_id: number;
   creator_name?: string | null;
-  team_id?: number;
-  game_id?: number;
-  game_genre?: string;
-  source_lang?: string;
-  target_lang?: string;
+  team_id?: number | null;
+  game_id?: number | null;
+  game_genre?: string | null;
+  source_lang?: string | null;
+  target_lang?: string | null;
   progress?: number;
   retry_count?: number;
   max_retry?: number;
-  payload?: Record<string, any>;
-  result?: Record<string, any>;
-  error_message?: string;
-  created_at?: string;
-  updated_at?: string;
+  payload?: Record<string, any> | null;
+  result?: Record<string, any> | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  deleted_at?: string | null;
+  is_deleted?: boolean;
 }
 
 interface JobListResponse {
@@ -62,6 +66,27 @@ interface JobListResponse {
   page?: number;
   per_page?: number;
   pages?: number;
+}
+
+function getApiError(error: any, fallback: string): string {
+  const detail = error?.response?.data?.detail;
+  if (detail) return typeof detail === 'string' ? detail : JSON.stringify(detail);
+  const msg = error?.response?.data?.message || error?.message;
+  if (msg && typeof msg === 'string') return msg;
+  return fallback;
+}
+
+/** Kiểm tra action có được phép theo state machine không */
+function canDo(action: string, status: string, isDeleted: boolean): boolean {
+  if (isDeleted) return action === 'restore' || action === 'hard_delete';
+  const allowed: Record<string, string[]> = {
+    pending:     ['cancel', 'edit', 'delete'],
+    in_progress: ['cancel', 'edit', 'delete'],
+    completed:   ['delete'],
+    failed:      ['retry', 'delete'],
+    cancelled:   ['retry', 'delete'],
+  };
+  return (allowed[status] ?? []).includes(action);
 }
 
 function JobPageContent() {
@@ -74,6 +99,9 @@ function JobPageContent() {
   // Confirmation modal state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Job | null>(null);
+
+  // Retry processing state
+  const [retryingJobId, setRetryingJobId] = useState<number | null>(null);
 
   // Jobs state
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -91,64 +119,80 @@ function JobPageContent() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('id');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Show deleted toggle
+  const [includeDeleted, setIncludeDeleted] = useState(false);
 
   // View detail modal
   const [viewingJob, setViewingJob] = useState<Job | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // Load jobs
-  const loadJobs = async () => {
+  // Ref giữ params hiện tại để dùng trong polling (tránh stale closure)
+  const pollParamsRef = useRef<any>({});
+
+  const loadJobs = useCallback(async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
 
       const params: any = {
         skip: (pagination.page - 1) * pagination.per_page,
         limit: pagination.per_page,
       };
-
       if (search) params.query = search;
       if (statusFilter) params.status = statusFilter;
       if (typeFilter) params.job_type = typeFilter;
+      if (includeDeleted) params.include_deleted = true;
       if (sortBy) {
         params.sort_by = sortBy;
         params.sort_order = sortOrder;
       }
+      pollParamsRef.current = params;
 
       const response = await jobAPI.getList(params);
       const data = response.data;
 
       if (data && typeof data === 'object' && Array.isArray(data.items)) {
         setJobs(data.items);
-        setPagination({
-          ...pagination,
+        setPagination((prev) => ({
+          ...prev,
           total: data.total ?? 0,
-          pages: data.pages ?? Math.ceil((data.total ?? 0) / pagination.per_page),
-        });
+          pages: data.pages ?? Math.ceil((data.total ?? 0) / prev.per_page),
+        }));
       } else if (Array.isArray(data)) {
         setJobs(data);
-        setPagination({
-          ...pagination,
+        setPagination((prev) => ({
+          ...prev,
           total: data.length,
-          pages: Math.ceil(data.length / pagination.per_page),
-        });
+          pages: Math.ceil(data.length / prev.per_page),
+        }));
       } else {
         setJobs([]);
       }
     } catch (error: any) {
       console.error('Error loading jobs:', error);
-      setError(error.response?.data?.detail || 'Không thể tải danh sách jobs');
-      setJobs([]);
+      if (!silent) setError(error.response?.data?.detail || 'Không thể tải danh sách jobs');
+      if (!silent) setJobs([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  };
+  }, [pagination.page, pagination.per_page, search, statusFilter, typeFilter, sortBy, sortOrder, includeDeleted]);
 
-  // Load jobs data
+  // Load khi filter/pagination thay đổi
   useEffect(() => {
     loadJobs();
-  }, [pagination.page, pagination.per_page, search, statusFilter, typeFilter, sortBy, sortOrder]);
+  }, [loadJobs]);
+
+  // Smart polling — poll mỗi 3s khi có job pending/in_progress, dừng khi tất cả ổn định
+  useEffect(() => {
+    const hasActiveJobs = jobs.some(
+      (j) => j.status === 'pending' || j.status === 'in_progress'
+    );
+    if (!hasActiveJobs) return;
+    const timer = setInterval(() => loadJobs(true), 3000);
+    return () => clearInterval(timer);
+  }, [jobs, loadJobs]);
 
   const handleExportExcel = async () => {
     try {
@@ -205,7 +249,7 @@ function JobPageContent() {
       loadJobs();
     } catch (error: any) {
       console.error('Error deleting job:', error);
-      toast.error(error.response?.data?.detail || 'Không thể xóa job');
+      toast.error(getApiError(error, 'Không thể xóa job'));
     } finally {
       setShowDeleteConfirm(false);
       setDeleteTarget(null);
@@ -217,19 +261,67 @@ function JobPageContent() {
     setDeleteTarget(null);
   };
 
+  const handleCancelJob = async (job: Job) => {
+    try {
+      await jobAPI.cancel(job.id);
+      toast.success(`Đã hủy job "${job.job_code}"`);
+      loadJobs();
+    } catch (error: any) {
+      toast.error(getApiError(error, 'Không thể hủy job'));
+    }
+  };
+
+  const handleRetryJob = async (job: Job) => {
+    setRetryingJobId(job.id);
+    try {
+      await jobAPI.retry(job.id);
+      toast.success(`Job "${job.job_code}" đã được đưa vào hàng chờ để thử lại.`);
+      loadJobs();
+    } catch (error: any) {
+      toast.error(getApiError(error, 'Không thể thử lại job'));
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
+
+  const handleRestoreJob = async (job: Job) => {
+    try {
+      await jobAPI.restore(job.id);
+      toast.success(`Đã khôi phục job "${job.job_code}"`);
+      loadJobs();
+    } catch (error: any) {
+      toast.error(getApiError(error, 'Không thể khôi phục job'));
+    }
+  };
+
+  const [hardDeleteTarget, setHardDeleteTarget] = useState<Job | null>(null);
+  const handleHardDelete = (job: Job) => setHardDeleteTarget(job);
+  const handleConfirmHardDelete = async () => {
+    if (!hardDeleteTarget) return;
+    try {
+      await jobAPI.hardDelete(hardDeleteTarget.id);
+      toast.success(`Đã xóa vĩnh viễn job "${hardDeleteTarget.job_code}"`);
+      loadJobs();
+    } catch (error: any) {
+      toast.error(getApiError(error, 'Không thể xóa vĩnh viễn job'));
+    } finally {
+      setHardDeleteTarget(null);
+    }
+  };
+
   // Handle column sorting
   const handleSort = (columnKey: string | null, direction: 'asc' | 'desc' | null) => {
     if (columnKey === null) {
       setSortBy('id');
-      setSortOrder('asc');
+      setSortOrder('desc');
     } else if (sortBy === columnKey) {
       if (direction === 'asc') {
         setSortOrder('desc');
       } else if (direction === 'desc') {
         setSortBy('id');
-        setSortOrder('asc');
+        setSortOrder('desc');
       } else {
-        setSortOrder('asc');
+        setSortOrder('desc');
       }
     } else {
       setSortBy(columnKey);
@@ -283,13 +375,16 @@ function JobPageContent() {
           cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
         };
         return (
-          <span
-            className={`inline-flex items-center px-2 py-1 text-xs rounded-full ${
-              statusColors[job.status] || statusColors.pending
-            }`}
-          >
-            {job.status}
-          </span>
+            <div className="flex flex-col gap-1 w-fit">
+            <span className={`inline-flex items-center px-2 py-1 text-xs rounded-full ${statusColors[job.status] || statusColors.pending}`}>
+              {job.status}
+            </span>
+            {job.is_deleted && (
+              <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                Đã xóa
+              </span>
+            )}
+          </div>
         );
       },
     },
@@ -297,29 +392,30 @@ function JobPageContent() {
       key: 'progress',
       header: 'Tiến độ',
       sortable: true,
-      render: (job: Job) => (
-        <div className="flex items-center gap-2">
-          <div className="w-16 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-            <div
-              className="bg-blue-600 h-2 rounded-full"
-              style={{ width: `${job.progress || 0}%` }}
-            />
+      render: (job: Job) => {
+        const rawPct = job.progress || 0;
+        const isActive = job.status === 'in_progress';
+        const displayPct = isActive && rawPct === 0 ? 50 : rawPct;
+        return (
+          <div className="flex items-center gap-2">
+            <div className="w-16 bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="h-2 rounded-full transition-all duration-500"
+                style={{
+                  width: `${displayPct}%`,
+                  background: isActive
+                    ? 'linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6)'
+                    : '#2563eb',
+                  ...(isActive ? { backgroundSize: '200% 100%', animation: 'shimmer 2s infinite linear' } : {}),
+                }}
+              />
+            </div>
+            <span className="text-sm text-gray-600 dark:text-gray-400">
+              {displayPct}%
+            </span>
           </div>
-          <span className="text-sm text-gray-600 dark:text-gray-400">
-            {job.progress || 0}%
-          </span>
-        </div>
-      ),
-    },
-    {
-      key: 'priority',
-      header: 'Độ ưu tiên',
-      sortable: true,
-      render: (job: Job) => (
-        <span className="text-gray-600 dark:text-gray-400">
-          {job.priority}
-        </span>
-      ),
+        );
+      },
     },
     {
       key: 'creator_name',
@@ -336,43 +432,77 @@ function JobPageContent() {
       header: 'Thao tác',
       sortable: false,
       className: 'text-left',
-      render: (job: Job) => (
+      render: (job: Job) => {
+        const s = job.status;
+        const del = !!job.is_deleted;
+        return (
           <div className="flex items-center gap-2 justify-start">
-            <button
-              onClick={() => setViewingJob(job)}
-              className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100"
-              title="Xem chi tiết"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-              </svg>
+            {/* Xem chi tiết — luôn hiển thị */}
+            <button onClick={() => setViewingJob(job)} className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100" title="Xem chi tiết">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
             </button>
-            <button
-              onClick={() => handleJobEdit(job)}
-              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-              title="Chỉnh sửa"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-            </button>
-            <button
-              onClick={() => handleDeleteJob(job)}
-              className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-              title="Xóa"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
+
+            {/* Chỉnh sửa */}
+            {canDo('edit', s, del) && (
+              <button onClick={() => handleJobEdit(job)} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" title="Chỉnh sửa">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+              </button>
+            )}
+
+            {/* Hủy */}
+            {canDo('cancel', s, del) && (
+              <button onClick={() => handleCancelJob(job)} className="text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300" title="Hủy job">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg>
+              </button>
+            )}
+
+            {/* Thử lại */}
+            {canDo('retry', s, del) && (
+              <button
+                onClick={() => handleRetryJob(job)}
+                disabled={retryingJobId === job.id}
+                className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={retryingJobId === job.id ? 'Đang xử lý...' : 'Thử lại'}
+              >
+                <svg className={`w-5 h-5 ${retryingJobId === job.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+              </button>
+            )}
+
+            {/* Khôi phục */}
+            {canDo('restore', s, del) && (
+              <button onClick={() => handleRestoreJob(job)} className="text-teal-600 hover:text-teal-800 dark:text-teal-400 dark:hover:text-teal-300" title="Khôi phục">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+              </button>
+            )}
+
+            {/* Soft delete */}
+            {canDo('delete', s, del) && (
+              <button onClick={() => handleDeleteJob(job)} className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300" title="Xóa">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              </button>
+            )}
+
+            {/* Xóa vĩnh viễn */}
+            {canDo('hard_delete', s, del) && (
+              <button onClick={() => handleHardDelete(job)} className="text-red-700 hover:text-red-900 dark:text-red-500 dark:hover:text-red-300" title="Xóa vĩnh viễn">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7a4 4 0 11-8 0 4 4 0 018 0zM9 14a6 6 0 00-6 6v1h12v-1a6 6 0 00-6-6zM21 12h-6" /></svg>
+              </button>
+            )}
           </div>
-        ),
+        );
+      },
     },
   ];
 
   return (
     <div className="space-y-6">
+      <style>{`
+        @keyframes shimmer {
+          0%   { background-position: 200% center; }
+          100% { background-position: -200% center; }
+        }
+      `}</style>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -380,7 +510,7 @@ function JobPageContent() {
             Quản Lý Jobs
           </h1>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Xem, theo dõi tiến độ và quản lý các job dịch (job được tạo tự động khi dịch file)
+            Xem, theo dõi tiến độ và quản lý các job dịch
           </p>
         </div>
         <Button onClick={handleExportExcel} disabled={exporting}>
@@ -438,6 +568,16 @@ function JobPageContent() {
               <option value={20}>20 / trang</option>
               <option value={50}>50 / trang</option>
             </select>
+
+            <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={includeDeleted}
+                onChange={(e) => { setIncludeDeleted(e.target.checked); setPagination(p => ({ ...p, page: 1 })); }}
+                className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+              />
+              Hiển thị đã xóa
+            </label>
           </div>
         }
       />
@@ -521,8 +661,8 @@ function JobPageContent() {
                   </span>
                   ?
                 </p>
-                <p className="text-xs text-red-600 dark:text-red-400 mt-2">
-                  Hành động này không thể hoàn tác. Xóa job không làm mất dữ liệu gốc của file đã upload.
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  Job sẽ được chuyển vào thùng rác (có thể khôi phục). Bật "Hiển thị đã xóa" để xem và khôi phục.
                 </p>
               </div>
 
@@ -545,43 +685,179 @@ function JobPageContent() {
         </div>
       )}
 
+      {/* Hard Delete Confirmation Modal */}
+      {hardDeleteTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-md w-full">
+            <div className="p-6">
+              <div className="flex items-center mb-4">
+                <div className="flex-shrink-0 w-12 h-12 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center">
+                  <svg className="w-6 h-6 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <div className="ml-4">
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Xóa vĩnh viễn</h3>
+                </div>
+              </div>
+              <div className="mb-6">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Bạn có chắc chắn muốn xóa <strong>vĩnh viễn</strong> job{' '}
+                  <span className="font-medium text-gray-900 dark:text-gray-100">"{hardDeleteTarget.job_code}"</span>?
+                </p>
+                <p className="text-xs text-red-600 dark:text-red-400 mt-2">
+                  Hành động này KHÔNG THỂ hoàn tác. Dữ liệu sẽ bị xóa hoàn toàn khỏi hệ thống.
+                </p>
+              </div>
+              <div className="flex items-center justify-end space-x-3">
+                <button
+                  onClick={() => setHardDeleteTarget(null)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  onClick={handleConfirmHardDelete}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-700 border border-transparent rounded-md hover:bg-red-800 transition-colors"
+                >
+                  Xóa vĩnh viễn
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* View Job Detail Modal */}
       {viewingJob && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                Chi tiết job: {viewingJob.job_code}
-              </h3>
+              <div>
+                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{viewingJob.job_code}</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">ID: #{viewingJob.id}</p>
+              </div>
               <button
                 onClick={() => setViewingJob(null)}
                 className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
-                title="Đóng"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div><span className="text-gray-500 dark:text-gray-400">Mã job:</span> <span className="font-medium">{viewingJob.job_code}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Loại:</span> <span className="font-medium">{viewingJob.job_type}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Trạng thái:</span> <span className="font-medium">{viewingJob.status}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Tiến độ:</span> <span className="font-medium">{viewingJob.progress ?? 0}%</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Độ ưu tiên:</span> <span className="font-medium">{viewingJob.priority}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Người tạo:</span> <span className="font-medium">{viewingJob.creator_name ?? '-'}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Ngôn ngữ nguồn:</span> <span className="font-medium">{viewingJob.source_lang ?? '-'}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Ngôn ngữ đích:</span> <span className="font-medium">{viewingJob.target_lang ?? '-'}</span></div>
-                <div><span className="text-gray-500 dark:text-gray-400">Ngày tạo:</span> <span className="font-medium">{viewingJob.created_at ? new Date(viewingJob.created_at).toLocaleString() : '-'}</span></div>
+
+            <div className="p-6 space-y-5 text-sm">
+              {/* Trạng thái + Tiến độ */}
+              <div className="flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-lg">
+                <div className="flex flex-col gap-1">
+                  {(() => {
+                    const statusColors: Record<string, string> = {
+                      pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
+                      in_progress: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+                      completed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+                      failed: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+                      cancelled: 'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300',
+                    };
+                    return (
+                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[viewingJob.status] || statusColors.pending}`}>
+                        {viewingJob.status}
+                      </span>
+                    );
+                  })()}
+                  {viewingJob.is_deleted && (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                      Đã xóa
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1">
+                  {(() => {
+                    const rawPct = viewingJob.progress ?? 0;
+                    const isActive = viewingJob.status === 'in_progress';
+                    const displayPct = isActive && rawPct === 0 ? 50 : rawPct;
+                    return (
+                      <>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-gray-500 dark:text-gray-400">Tiến độ</span>
+                          <span className="font-semibold text-gray-900 dark:text-gray-100">{displayPct}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 overflow-hidden">
+                          <div
+                            className="h-2 rounded-full transition-all duration-500"
+                            style={{
+                              width: `${displayPct}%`,
+                              background: isActive
+                                ? 'linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6)'
+                                : '#2563eb',
+                              ...(isActive ? { backgroundSize: '200% 100%', animation: 'shimmer 2s infinite linear' } : {}),
+                            }}
+                          />
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
+
+              {/* Thông tin cơ bản */}
+              <div>
+                <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Thông tin cơ bản</h4>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Loại job</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.job_type}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thử lại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.retry_count ?? 0} / {viewingJob.max_retry ?? 3}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Người tạo</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.creator_name ?? '-'}</span></div>
+                  {viewingJob.game_id && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Game ID</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_id}</span></div>}
+                  {viewingJob.game_genre && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thể loại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_genre}</span></div>}
+                </div>
+              </div>
+
+              {/* Ngôn ngữ */}
+              <div>
+                <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Dịch thuật</h4>
+                <div className="flex items-center gap-3">
+                  <span className="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 rounded font-medium text-gray-900 dark:text-gray-100">{viewingJob.source_lang ?? '—'}</span>
+                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+                  <span className="px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 rounded font-medium text-blue-700 dark:text-blue-300">{viewingJob.target_lang ?? '—'}</span>
+                </div>
+              </div>
+
+              {/* Thời gian */}
+              <div>
+                <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Thời gian</h4>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Tạo lúc</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.created_at ? new Date(viewingJob.created_at).toLocaleString('vi-VN') : '-'}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Bắt đầu</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.started_at ? new Date(viewingJob.started_at).toLocaleString('vi-VN') : '-'}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Hoàn thành</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.finished_at ? new Date(viewingJob.finished_at).toLocaleString('vi-VN') : '-'}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Cập nhật</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.updated_at ? new Date(viewingJob.updated_at).toLocaleString('vi-VN') : '-'}</span></div>
+                  {viewingJob.deleted_at && (
+                    <div className="flex justify-between col-span-2"><span className="text-red-500 dark:text-red-400">Đã xóa lúc</span><span className="font-medium text-red-600 dark:text-red-400">{new Date(viewingJob.deleted_at).toLocaleString('vi-VN')}</span></div>
+                  )}
+                </div>
+              </div>
+
+              {/* Lỗi */}
               {viewingJob.error_message && (
-                <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300">
-                  <span className="font-medium">Lỗi:</span> {viewingJob.error_message}
+                <div>
+                  <h4 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2">Thông báo lỗi</h4>
+                  <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-red-700 dark:text-red-300">
+                    {viewingJob.error_message}
+                  </div>
                 </div>
               )}
+
+              {/* Kết quả */}
+              {viewingJob.result && Object.keys(viewingJob.result).length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Kết quả</h4>
+                  <pre className="p-3 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs overflow-x-auto text-gray-800 dark:text-gray-200">{JSON.stringify(viewingJob.result, null, 2)}</pre>
+                </div>
+              )}
+
+              {/* Payload */}
               {viewingJob.payload && Object.keys(viewingJob.payload).length > 0 && (
                 <div>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">Payload:</span>
-                  <pre className="mt-1 p-3 bg-gray-100 dark:bg-gray-700 rounded text-xs overflow-x-auto">{JSON.stringify(viewingJob.payload, null, 2)}</pre>
+                  <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Dữ liệu đầu vào (Payload)</h4>
+                  <pre className="p-3 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs overflow-x-auto text-gray-800 dark:text-gray-200">{JSON.stringify(viewingJob.payload, null, 2)}</pre>
                 </div>
               )}
             </div>

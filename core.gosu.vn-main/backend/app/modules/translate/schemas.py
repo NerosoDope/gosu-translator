@@ -3,16 +3,19 @@ from typing import Optional, Any, List, Dict
 
 
 class ParseFileResponse(BaseModel):
-    """Response cho API parse file Excel/CSV: danh sách cột và vài dòng xem trước."""
+    """Response cho API parse file: danh sách cột và vài dòng xem trước.
+    DOCX paragraph mode: preview_html chứa HTML đã giữ nguyên heading/bold/italic/list."""
     columns: List[str]
     preview_rows: List[Dict[str, str]]
+    preview_html: Optional[str] = None
 
 
 class TranslateFileResponse(BaseModel):
-    """Response cho API dịch file: cột (gốc + _translated) và toàn bộ dòng đã dịch. Với file JSON có thêm translated_json (cấu trúc gốc, chỉ cột đã dịch thay đổi)."""
+    """Response cho API dịch file: cột (gốc + _translated) và toàn bộ dòng đã dịch. JSON: translated_json. DOCX: translated_docx_b64 (base64)."""
     columns: List[str]
     rows: List[Dict[str, str]]
     translated_json: Optional[Dict[str, Any]] = None
+    translated_docx_b64: Optional[str] = None
 
 
 class ExportFileRequest(BaseModel):
@@ -55,3 +58,52 @@ class TranslateRequest(BaseModel):
 
 class TranslateResponse(BaseModel):
     translated_text: str
+
+
+class ParseAllRowsResponse(BaseModel):
+    """Response cho API parse toàn bộ dòng file (dùng cho Hiệu Đính File)."""
+    columns: List[str]
+    rows: List[Dict[str, str]]
+    total: int
+
+
+class ProofreadRowRequest(BaseModel):
+    """Request hiệu đính 1 dòng bằng AI: gửi văn bản gốc + bản dịch hiện tại."""
+    original: str
+    translated: str
+    source_lang: str
+    target_lang: str
+    prompt_id: Optional[int] = None
+    context: Optional[str] = None
+    style: Optional[str] = None
+
+
+class ProofreadRowResponse(BaseModel):
+    """Response hiệu đính 1 dòng."""
+    proofread: str
+
+
+class ProofreadBatchItem(BaseModel):
+    index: int
+    original: str
+    translated: str
+
+
+class ProofreadBatchRequest(BaseModel):
+    """Request hiệu đính nhiều dòng cùng lúc (batch AI)."""
+    items: List[ProofreadBatchItem]
+    source_lang: str
+    target_lang: str
+    prompt_id: Optional[int] = None
+    context: Optional[str] = None
+    style: Optional[str] = None
+
+
+class ProofreadBatchResultItem(BaseModel):
+    index: int
+    proofread: str
+
+
+class ProofreadBatchResponse(BaseModel):
+    """Response hiệu đính batch."""
+    results: List[ProofreadBatchResultItem]
