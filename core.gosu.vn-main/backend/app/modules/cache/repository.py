@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, text as sa_text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from .models import Cache
 
 class CacheRepository:
@@ -50,15 +51,49 @@ class CacheRepository:
         return result.scalar_one_or_none()
 
     async def get_by_key(self, key: str) -> Optional[Cache]:
-        result = await self.db.execute(select(Cache).where(Cache.key == key))
+        """Trả về cache entry chưa hết hạn.
+        - ttl IS NOT NULL: so sánh created_at + ttl giây với now()
+        - ttl IS NULL: áp dụng TTL mặc định 86400 giây (1 ngày)
+        """
+        result = await self.db.execute(
+            select(Cache).where(
+                Cache.key == key,
+                # Chưa hết hạn theo ttl rõ ràng hoặc mặc định 1 ngày
+                (Cache.ttl.isnot(None) & (
+                    Cache.created_at + sa_text("(cache.ttl || ' seconds')::interval") > func.now()
+                ))
+                |
+                (Cache.ttl.is_(None) & (
+                    Cache.created_at + sa_text("interval '86400 seconds'") > func.now()
+                )),
+            )
+        )
         return result.scalar_one_or_none()
 
     async def create(self, data: Dict[str, Any]) -> Cache:
-        cache = Cache(**data)
-        self.db.add(cache)
+        """
+        Upsert cache entry: INSERT ... ON CONFLICT (key) DO UPDATE SET value, ttl
+        chỉ khi value thực sự thay đổi (tránh ghi thừa gây phình DB).
+        """
+        from sqlalchemy import text as sa_text
+        stmt = (
+            pg_insert(Cache)
+            .values(**data)
+            .on_conflict_do_update(
+                index_elements=["key"],
+                set_={
+                    "value": data.get("value"),
+                    "ttl": data.get("ttl"),
+                    "updated_at": sa_text("now()"),
+                },
+                where=Cache.value != data.get("value"),
+            )
+            .returning(Cache)
+        )
+        result = await self.db.execute(stmt)
         await self.db.commit()
-        await self.db.refresh(cache)
-        return cache
+        row = result.fetchone()
+        return row[0] if row else Cache(**data)
 
     async def update(self, id: int, data: Dict[str, Any]) -> Optional[Cache]:
         result = await self.db.execute(select(Cache).where(Cache.id == id))
@@ -79,3 +114,28 @@ class CacheRepository:
         await self.db.delete(cache)
         await self.db.commit()
         return True
+
+    async def delete_expired(self) -> int:
+        """Xóa tất cả cache entries đã hết TTL.
+        - ttl IS NOT NULL: so sánh created_at + ttl giây với now()
+        - ttl IS NULL: áp dụng TTL mặc định 86400 giây (1 ngày)
+        Trả về số bản ghi đã xóa.
+        """
+        stmt = (
+            delete(Cache)
+            .where(
+                # ttl có giá trị rõ ràng: hết hạn theo ttl
+                (Cache.ttl.isnot(None) & (
+                    Cache.created_at + sa_text("(cache.ttl || ' seconds')::interval") <= func.now()
+                ))
+                |
+                # ttl NULL: dùng mặc định 1 ngày
+                (Cache.ttl.is_(None) & (
+                    Cache.created_at + sa_text("interval '86400 seconds'") <= func.now()
+                ))
+            )
+            .returning(Cache.id)
+        )
+        result = await self.db.execute(stmt)
+        await self.db.commit()
+        return len(result.fetchall())

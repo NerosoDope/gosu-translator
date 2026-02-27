@@ -101,7 +101,7 @@ function AuditLogManagementContent() {
 
   useEffect(() => {
     loadLogs();
-  }, [pagination.skip, pagination.limit, moduleFilter, actionFilter, userFilter]);
+  }, [pagination.skip, pagination.limit, moduleFilter, actionFilter, userFilter, search]);
 
   const loadLogs = async () => {
     try {
@@ -114,26 +114,14 @@ function AuditLogManagementContent() {
 
       if (moduleFilter) params.module = moduleFilter;
       if (actionFilter) params.action = actionFilter;
-      if (userFilter) params.user_id = parseInt(userFilter);
+      if (userFilter) params.user_id = parseInt(userFilter, 10);
+      if (search?.trim()) params.search = search.trim();
 
       const response = await auditAPI.getLogs(params);
       const data: AuditLogListResponse = response.data;
 
-      // Filter by search on client side
-      let filteredData = data.items;
-      if (search) {
-        const searchLower = search.toLowerCase();
-        filteredData = data.items.filter(
-          (log: AuditLog) =>
-            log.action.toLowerCase().includes(searchLower) ||
-            log.module.toLowerCase().includes(searchLower) ||
-            log.user_email?.toLowerCase().includes(searchLower) ||
-            log.resource_type?.toLowerCase().includes(searchLower)
-        );
-      }
-
-      setLogs(filteredData);
-      setPagination((prev) => ({ ...prev, total: data.total }));
+      setLogs(data.items ?? []);
+      setPagination((prev) => ({ ...prev, total: data.total ?? 0 }));
     } catch (error: any) {
       console.error("Failed to load audit logs:", error);
       const errorMessage =
@@ -147,8 +135,9 @@ function AuditLogManagementContent() {
     }
   };
 
-  const totalPages = Math.ceil(pagination.total / pagination.limit);
-  const currentPage = Math.floor(pagination.skip / pagination.limit) + 1;
+  const limit = Math.max(1, pagination.limit);
+  const totalPages = Math.max(0, Math.ceil((pagination.total ?? 0) / limit));
+  const currentPage = totalPages === 0 ? 1 : Math.min(totalPages, Math.max(1, Math.floor(pagination.skip / limit) + 1));
 
   // Get unique modules and actions from logs
   const modules = Array.from(
@@ -292,7 +281,7 @@ function AuditLogManagementContent() {
           onPageChange={(page) =>
             setPagination((prev) => ({
               ...prev,
-              skip: (page - 1) * prev.limit,
+              skip: Math.max(0, (page - 1) * prev.limit),
             }))
           }
           pageSize={pagination.limit}

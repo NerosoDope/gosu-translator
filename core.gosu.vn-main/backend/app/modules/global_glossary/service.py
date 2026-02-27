@@ -29,9 +29,9 @@ class Global_GlossaryService:
         """List global_glossary"""
         return await self.repo.list(skip=skip, limit=limit)
     
-    async def find_translation(self, term: str, language_pair: str) -> Optional[str]:
-        """Tìm bản dịch theo term và language_pair (exact match)."""
-        return await self.repo.find_translation(term=term, language_pair=language_pair)
+    async def find_translation(self, term: str, language_pair: str, game_category_id: Optional[int] = None) -> Optional[str]:
+        """Tìm bản dịch theo term và language_pair (exact match). Lọc theo game_category_id nếu có."""
+        return await self.repo.find_translation(term=term, language_pair=language_pair, game_category_id=game_category_id)
 
     async def get(self, id: int) -> Optional[Dict[str, Any]]:
         """Get global_glossary by ID"""

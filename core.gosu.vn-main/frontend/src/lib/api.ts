@@ -6,8 +6,41 @@
  */
 import axios from 'axios';
 
+// ── SSE event types cho translate-file-stream ──
+export interface TranslateStreamStartEvent {
+  type: 'start';
+  total: number;
+  batch_total: number;
+}
+export interface TranslateStreamProgressEvent {
+  type: 'progress';
+  done: number;
+  total: number;
+  batch_done: number;
+  batch_total: number;
+  percent: number;
+  batch_size: number;
+  batch_tokens: number;
+}
+export interface TranslateStreamDoneEvent {
+  type: 'done';
+  columns: string[];
+  rows: Record<string, string>[];
+  translated_json?: Record<string, unknown> | null;
+  translated_docx_b64?: string | null;
+}
+export interface TranslateStreamErrorEvent {
+  type: 'error';
+  message: string;
+}
+export type TranslateStreamEvent =
+  | TranslateStreamStartEvent
+  | TranslateStreamProgressEvent
+  | TranslateStreamDoneEvent
+  | TranslateStreamErrorEvent;
+
 const useProxy = process.env.NEXT_PUBLIC_USE_API_PROXY !== 'false';
-const API_BASE = useProxy
+export const API_BASE = useProxy
   ? '/api/v1' // Proxy qua Next.js rewrites -> không CORS
   : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1`;
 
@@ -271,6 +304,7 @@ export const auditAPI = {
     resource_type?: string;
     start_date?: string;
     end_date?: string;
+    search?: string;
   }) => apiClient.get('/audit/logs', { params }),
 
   /**
@@ -438,11 +472,15 @@ export const languageAPI = {
 // Job API
 export const jobAPI = {
   getList: (params?: any) => apiClient.get(`/job`, { params }),
-  get: (id: number) => apiClient.get(`/job/${id}`),
+  get: (id: number, params?: { include_deleted?: boolean }) => apiClient.get(`/job/${id}`, { params }),
   create: (data: any) => apiClient.post(`/job`, data),
   update: (id: number, data: any) => apiClient.put(`/job/${id}`, data),
   delete: (id: number) => apiClient.delete(`/job/${id}`),
-  exportExcel: (params?: { query?: string; status?: string; job_type?: string }) =>
+  hardDelete: (id: number) => apiClient.delete(`/job/${id}/hard`),
+  restore: (id: number) => apiClient.patch(`/job/${id}/restore`),
+  cancel: (id: number) => apiClient.patch(`/job/${id}/cancel`),
+  retry: (id: number) => apiClient.patch(`/job/${id}/retry`),
+  exportExcel: (params?: { query?: string; status?: string; job_type?: string; include_deleted?: boolean }) =>
     apiClient.get(`/job/export/excel`, { params, responseType: 'blob' }),
 };
 
@@ -481,6 +519,8 @@ export const translateAPI = {
     prompt_id?: number | null;
     context?: string | null;
     style?: string | null;
+    game_id?: number | null;
+    game_category_id?: number | null;
   }) => {
     const formData = new FormData();
     formData.append('file', params.file);
@@ -490,7 +530,9 @@ export const translateAPI = {
     if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
     if (params.context != null && params.context !== '') formData.append('context', params.context);
     if (params.style != null && params.style !== '') formData.append('style', params.style);
-    return apiClient.post<{ columns: string[]; rows: Record<string, string>[]; translated_json?: Record<string, unknown> | null }>(
+    if (params.game_id != null) formData.append('game_id', String(params.game_id));
+    if (params.game_category_id != null) formData.append('game_category_id', String(params.game_category_id));
+    return apiClient.post<{ columns: string[]; rows: Record<string, string>[]; translated_json?: Record<string, unknown> | null; translated_docx_b64?: string | null }>(
       '/translate/translate-file',
       formData,
       { timeout: 300000 }
@@ -509,6 +551,8 @@ export const translateAPI = {
     prompt_id?: number | null;
     context?: string | null;
     style?: string | null;
+    game_id?: number | null;
+    game_category_id?: number | null;
   }) => {
     const formData = new FormData();
     formData.append('file', params.file);
@@ -519,6 +563,8 @@ export const translateAPI = {
     if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
     if (params.context != null && params.context !== '') formData.append('context', params.context);
     if (params.style != null && params.style !== '') formData.append('style', params.style);
+    if (params.game_id != null) formData.append('game_id', String(params.game_id));
+    if (params.game_category_id != null) formData.append('game_category_id', String(params.game_category_id));
     return apiClient.post('/translate/translate-json-file', formData, {
       responseType: 'blob',
       timeout: 300000,
@@ -538,6 +584,8 @@ export const translateAPI = {
     prompt_id?: number | null;
     context?: string | null;
     style?: string | null;
+    game_id?: number | null;
+    game_category_id?: number | null;
   }) => {
     const formData = new FormData();
     formData.append('file', params.file);
@@ -549,10 +597,91 @@ export const translateAPI = {
     if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
     if (params.context != null && params.context !== '') formData.append('context', params.context);
     if (params.style != null && params.style !== '') formData.append('style', params.style);
+    if (params.game_id != null) formData.append('game_id', String(params.game_id));
+    if (params.game_category_id != null) formData.append('game_category_id', String(params.game_category_id));
     return apiClient.post('/translate/translate-xml-file', formData, {
       responseType: 'blob',
       timeout: 300000,
     });
+  },
+  /**
+   * Dịch file với SSE streaming để hiển thị tiến trình real-time.
+   * Dùng native fetch thay vì axios (EventSource chỉ hỗ trợ GET).
+   * onEvent được gọi mỗi khi nhận SSE event từ server.
+   * Trả về event "done" cuối cùng khi hoàn tất.
+   */
+  translateFileStream: async (
+    params: {
+      file: File;
+      selected_columns: string[];
+      source_lang: string;
+      target_lang: string;
+      prompt_id?: number | null;
+      context?: string | null;
+      style?: string | null;
+      game_id?: number | null;
+      game_category_id?: number | null;
+    },
+    onEvent: (event: TranslateStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<TranslateStreamDoneEvent> => {
+    const formData = new FormData();
+    formData.append('file', params.file);
+    formData.append('selected_columns', JSON.stringify(params.selected_columns));
+    formData.append('source_lang', params.source_lang);
+    formData.append('target_lang', params.target_lang);
+    if (params.prompt_id != null) formData.append('prompt_id', String(params.prompt_id));
+    if (params.context) formData.append('context', params.context);
+    if (params.style) formData.append('style', params.style);
+    if (params.game_id != null) formData.append('game_id', String(params.game_id));
+    if (params.game_category_id != null) formData.append('game_category_id', String(params.game_category_id));
+
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('access_token') : null;
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(`${API_BASE}/translate/translate-file-stream`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal,
+    });
+
+    if (!response.ok || !response.body) {
+      let detail = `HTTP ${response.status}`;
+      try { const j = await response.json(); detail = j?.detail || detail; } catch { /* noop */ }
+      throw new Error(detail);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let doneEvent: TranslateStreamDoneEvent | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(trimmed.slice(6)) as TranslateStreamEvent;
+            onEvent(event);
+            if (event.type === 'done') doneEvent = event as TranslateStreamDoneEvent;
+            if (event.type === 'error') throw new Error((event as TranslateStreamErrorEvent).message);
+          } catch (e: any) {
+            if (e?.message && !e.message.startsWith('JSON')) throw e;
+          }
+        }
+      }
+    }
+
+    if (!doneEvent) throw new Error('Stream kết thúc không có kết quả.');
+    return doneEvent;
   },
   /**
    * Xuất kết quả dịch ra file theo đuôi (csv, xlsx, json, xml, docx).
@@ -619,6 +748,50 @@ export const filesAPI = {
       },
     });
   },
+};
+
+// Proofread API (Hiệu Đính File)
+export const proofreadAPI = {
+  /**
+   * Parse toàn bộ dòng từ file .xlsx/.csv để hiệu đính.
+   * Trả về columns + tất cả rows (không giới hạn 5 dòng preview).
+   */
+  parseFileFull: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post<{ columns: string[]; rows: Record<string, string>[]; total: number }>(
+      '/translate/parse-file-full',
+      formData
+    );
+  },
+  /**
+   * Hiệu đính 1 dòng bằng AI: gửi văn bản gốc + bản dịch hiện tại.
+   */
+  proofreadRow: (data: {
+    original: string;
+    translated: string;
+    source_lang: string;
+    target_lang: string;
+    prompt_id?: number | null;
+    context?: string | null;
+    style?: string | null;
+  }) =>
+    apiClient.post<{ proofread: string }>('/translate/proofread-row', data),
+  /**
+   * Hiệu đính nhiều dòng cùng lúc (batch AI).
+   */
+  proofreadBatch: (data: {
+    items: { index: number; original: string; translated: string }[];
+    source_lang: string;
+    target_lang: string;
+    prompt_id?: number | null;
+    context?: string | null;
+    style?: string | null;
+  }) =>
+    apiClient.post<{ results: { index: number; proofread: string }[] }>(
+      '/translate/proofread-batch',
+      data
+    ),
 };
 
 // Game API

@@ -6,7 +6,6 @@ class GameCategoryBase(BaseModel):
     name: str
     description: Optional[str] = None
     is_active: bool = True
-    translation_style: Optional[str] = None
 
 class GameCategoryCreate(GameCategoryBase):
     pass
@@ -15,13 +14,11 @@ class GameCategoryUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
-    translation_style: Optional[str] = None
 
 class GameCategoryResponse(GameCategoryBase):
     id: int
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
-    translation_style: Optional[str]
 
     class Config:
         orm_mode = True

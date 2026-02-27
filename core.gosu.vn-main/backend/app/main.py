@@ -130,6 +130,24 @@ async def root():
     }
 
 
+async def _cache_ttl_cleanup_loop():
+    """Background task: mỗi 60 giây quét và xóa cache entries đã hết TTL."""
+    import asyncio
+    from app.db.session import AsyncSessionLocal
+    from app.modules.cache.service import CacheService
+
+    await asyncio.sleep(10)  # chờ app khởi động xong
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                deleted = await CacheService(db).cleanup_expired()
+                if deleted:
+                    logger.info(f"[Cache TTL] Đã xóa {deleted} cache entries hết hạn.")
+        except Exception as e:
+            logger.error(f"[Cache TTL] Lỗi khi dọn cache hết hạn: {e}", exc_info=True)
+        await asyncio.sleep(60)
+
+
 @app.on_event("startup")
 async def startup_event():
     """
@@ -138,6 +156,8 @@ async def startup_event():
     Log thông tin về environment và debug mode khi app start.
     Tự động seed permissions và gán cho ADMIN role.
     """
+    import asyncio
+
     logger.info("GOSU Core Platform API starting...")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Debug mode: {settings.DEBUG}")
@@ -145,4 +165,13 @@ async def startup_event():
     # Tự động seed permissions và gán cho ADMIN role
     from app.core.startup import seed_permissions_on_startup
     await seed_permissions_on_startup()
+
+    # Khởi động background task tự động xóa cache hết hạn TTL
+    asyncio.create_task(_cache_ttl_cleanup_loop())
+    logger.info("[Cache TTL] Background cleanup task đã được khởi động (interval: 60s).")
+
+    # Khởi động job priority worker
+    from app.modules.job.worker import job_worker_loop
+    asyncio.create_task(job_worker_loop())
+    logger.info("[Worker] Job priority worker đã được khởi động.")
 
