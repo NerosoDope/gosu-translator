@@ -174,4 +174,3 @@ async def startup_event():
     from app.modules.job.worker import job_worker_loop
     asyncio.create_task(job_worker_loop())
     logger.info("[Worker] Job priority worker đã được khởi động.")
-

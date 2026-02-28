@@ -3,7 +3,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import Button from '@/components/ui/Button';
 import { useToastContext } from '@/context/ToastContext';
-import { proofreadAPI, translateAPI, languageAPI } from '@/lib/api';
+import { proofreadAPI, translateAPI, languageAPI, jobAPI } from '@/lib/api';
+import { authStore } from '@/lib/auth';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ export default function ProofreadFilePage() {
   const [search, setSearch] = useState('');
   const [selectAll, setSelectAll] = useState(false);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [saveToJobLoading, setSaveToJobLoading] = useState(false);
 
   // Find & replace
   const [findText, setFindText] = useState('');
@@ -221,6 +223,10 @@ export default function ProofreadFilePage() {
   const handleProofreadRow = async (id: number) => {
     const row = rows.find((r) => r.id === id);
     if (!row) return;
+    if (!sourceLang || !targetLang) {
+      toast.error('Vui lòng chọn ngôn ngữ nguồn và ngôn ngữ đích trước khi hiệu đính.');
+      return;
+    }
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, status: 'loading' } : r));
     try {
       const res = await proofreadAPI.proofreadRow({ original: row.original, translated: row.translated, source_lang: sourceLang, target_lang: targetLang });
@@ -236,6 +242,10 @@ export default function ProofreadFilePage() {
   const handleProofreadBatch = async () => {
     const targets = rows.filter((r) => r.selected && r.status !== 'loading');
     if (!targets.length) { toast.error('Chọn ít nhất 1 dòng để hiệu đính batch.'); return; }
+    if (!sourceLang || !targetLang) {
+      toast.error('Vui lòng chọn ngôn ngữ nguồn và ngôn ngữ đích trước khi hiệu đính.');
+      return;
+    }
     setRows((prev) => prev.map((r) => r.selected ? { ...r, status: 'loading' } : r));
     setBatchLoading(true);
     try {
@@ -270,6 +280,54 @@ export default function ProofreadFilePage() {
   const handleSelectRow = (id: number, checked: boolean) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, selected: checked } : r));
     if (!checked) setSelectAll(false);
+  };
+
+  // ── Lưu vào Jobs ──────────────────────────────────────────────────────────
+
+  const handleSaveToJob = async () => {
+    if (!rows.length) {
+      toast.error('Chưa có dữ liệu để lưu.');
+      return;
+    }
+    let user;
+    try {
+      user = await authStore.getCurrentUser();
+    } catch {
+      toast.error('Vui lòng đăng nhập để lưu vào Jobs.');
+      return;
+    }
+    if (!user?.id) {
+      toast.error('Vui lòng đăng nhập để lưu vào Jobs.');
+      return;
+    }
+    setSaveToJobLoading(true);
+    try {
+      const jobCode = `PROOFREAD-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const payload = {
+        rows: rows.map((r) => ({ id: r.id, original: r.original, translated: r.translated, status: r.status })),
+        source_lang: sourceLang || undefined,
+        target_lang: targetLang || undefined,
+        filename: file?.name ?? undefined,
+        total_rows: rows.length,
+      };
+      await jobAPI.create({
+        job_code: jobCode,
+        job_type: 'proofread',
+        status: 'completed',
+        progress: 100,
+        user_id: user.id,
+        source_lang: sourceLang || null,
+        target_lang: targetLang || null,
+        payload,
+        result: { total_rows: rows.length, saved_at: new Date().toISOString() },
+      });
+      toast.success('Đã lưu kết quả hiệu đính vào Jobs. Bạn có thể xem tại trang Công việc của tôi.');
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Không thể lưu vào Jobs. Vui lòng thử lại.');
+    } finally {
+      setSaveToJobLoading(false);
+    }
   };
 
   // ── Download ──────────────────────────────────────────────────────────────
@@ -497,6 +555,18 @@ export default function ProofreadFilePage() {
                 Tải Lên File Mới
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => { const f = e.target.files?.[0]; if (f) { pickFile(f); setStep('upload'); } e.target.value = ''; }} className="hidden" />
               </label>
+              <Button
+                variant="secondary"
+                isLoading={saveToJobLoading}
+                disabled={saveToJobLoading || rows.length === 0}
+                onClick={handleSaveToJob}
+                title="Lưu kết quả hiệu đính vào danh sách Công việc của tôi"
+              >
+                <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+                Lưu vào Jobs
+              </Button>
               <Button onClick={() => handleDownload('xlsx')}>
                 <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -688,6 +758,17 @@ export default function ProofreadFilePage() {
               )}
             </p>
             <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                isLoading={saveToJobLoading}
+                disabled={saveToJobLoading || rows.length === 0}
+                onClick={handleSaveToJob}
+              >
+                <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+                Lưu vào Jobs
+              </Button>
               <Button onClick={() => handleDownload('xlsx')}>
                 <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />

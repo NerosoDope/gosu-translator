@@ -3,7 +3,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Button from '@/components/ui/Button';
 import { useToastContext } from '@/context/ToastContext';
-import { translateAPI, languageAPI, gameAPI, gameCategoryAPI, promptsAPI, proofreadAPI } from '@/lib/api';
+import { translateAPI, languageAPI, gameAPI, gameCategoryAPI, promptsAPI, proofreadAPI, jobAPI } from '@/lib/api';
+import { authStore } from '@/lib/auth';
 import type { TranslateStreamProgressEvent } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
 
@@ -82,6 +83,7 @@ export default function TranslationFilePage() {
   const [s5FindText, setS5FindText] = useState('');
   const [s5ReplaceText, setS5ReplaceText] = useState('');
   const [s5ProofMode, setS5ProofMode] = useState(false);
+  const [s5SaveJobLoading, setS5SaveJobLoading] = useState(false);
 
   // ── Config Step 3 ────────────────────────────────────────────────────────
   const [translateStyle, setTranslateStyle] = useState('');
@@ -304,6 +306,39 @@ export default function TranslationFilePage() {
     },
     [file?.name, toast, translatedJsonStructure, translatedDocxB64]
   );
+
+  // ── Save to Jobs ──────────────────────────────────────────────────────────
+
+  const s5SaveToJob = useCallback(async (jobType: 'translation') => {
+    setS5SaveJobLoading(true);
+    try {
+      const user = await authStore.getCurrentUser();
+      if (!user?.id) { toast.error('Vui lòng đăng nhập để lưu vào Jobs.'); return; }
+      const jobCode = `${jobType.toUpperCase()}-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      await jobAPI.create({
+        job_code: jobCode,
+        job_type: jobType,
+        status: 'completed',
+        progress: 100,
+        user_id: user.id,
+        source_lang: sourceLang || null,
+        target_lang: targetLang || null,
+        payload: {
+          filename: file?.name ?? null,
+          total_rows: previewRows.length,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+        },
+        result: { total_rows: previewRows.length, saved_at: new Date().toISOString() },
+      });
+      toast.success('Đã lưu vào Jobs. Bạn có thể xem tại trang Công việc của tôi.');
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Không thể lưu vào Jobs.');
+    } finally {
+      setS5SaveJobLoading(false);
+    }
+  }, [file?.name, sourceLang, targetLang, previewRows.length, toast]);
 
   // ── Step-5 helpers ────────────────────────────────────────────────────────
 
@@ -1229,10 +1264,22 @@ export default function TranslationFilePage() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <Button onClick={() => setS5ProofMode(true)}>Hiệu Đính</Button>
                 <Button variant="secondary" onClick={() => downloadTranslatedFile(previewRows, displayColumns)} disabled={displayColumns.length === 0 || previewRows.length === 0}>
                   Tải File
+                </Button>
+                <Button
+                  variant="secondary"
+                  isLoading={s5SaveJobLoading}
+                  disabled={s5SaveJobLoading || previewRows.length === 0}
+                  onClick={() => s5SaveToJob('translation')}
+                  title="Lưu kết quả dịch file vào Jobs (job_type: translation)"
+                >
+                  <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                  </svg>
+                  Lưu vào Jobs
                 </Button>
                 <Button variant="secondary" onClick={resetAll}>Dịch thuật Mới</Button>
               </div>
@@ -1382,6 +1429,18 @@ export default function TranslationFilePage() {
               ) : 'Tải xuống hoặc chỉnh sửa trước khi tải.'}
             </p>
             <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                isLoading={s5SaveJobLoading}
+                disabled={s5SaveJobLoading || s5Rows.length === 0}
+                onClick={() => s5SaveToJob('translation')}
+                title="Lưu kết quả hiệu đính vào Jobs"
+              >
+                <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+                Lưu vào Jobs
+              </Button>
               <Button onClick={() => s5Download('xlsx')}>
                 <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                 Tải File .xlsx

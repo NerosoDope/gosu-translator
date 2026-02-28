@@ -905,6 +905,7 @@ function GameContent() {
           }
           title={`Upload Excel - Từ Điển Game (${selectedGameForGlossary.name})`}
           gameId={selectedGameForGlossary.id}
+          glossaryType="game_glossary"
         />
       )}
     </div>

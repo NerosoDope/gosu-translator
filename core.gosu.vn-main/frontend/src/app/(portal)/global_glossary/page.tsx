@@ -725,6 +725,7 @@ function GlobalGlossaryContent() {
             }}
             uploadFunction={global_glossaryAPI.uploadExcel}
             title="Upload Excel - Từ Điển Toàn Cục"
+            glossaryType="global_glossary"
           />
       </div>
     </QueryClientProvider>
