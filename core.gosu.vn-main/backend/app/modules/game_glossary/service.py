@@ -5,9 +5,10 @@ Author: GOSU Development Team
 Version: 1.0.0
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.modules.game_glossary.repository import Game_GlossaryRepository
 from app.modules.import_batches.service import ImportBatchService
 from fastapi import UploadFile
@@ -243,11 +244,11 @@ class Game_GlossaryService:
                 "errors": [f"Error processing Excel file: {str(e)}"]
             }
 
-    async def export_excel(self, game_id: Optional[int] = None) -> bytes:
+    async def export_excel(self, game_id: Optional[int] = None) -> Tuple[bytes, Optional[str]]:
         """
-        Export Game Glossary ra file Excel.
+        Export Game Glossary ra file Excel, có cột tên game.
         Nếu truyền game_id thì chỉ export glossary của game đó.
-        Trả về bytes của file .xlsx.
+        Trả về (bytes của file .xlsx, tên game nếu export theo 1 game để đặt tên file).
         """
         # Lazy import openpyxl
         try:
@@ -268,12 +269,36 @@ class Game_GlossaryService:
             sort_order=None,
         )
 
+        # Lấy tên game cho các game_id có trong items (lazy import tránh circular import)
+        raw_ids = {item.get("game_id") for item in items if item.get("game_id") is not None}
+        game_ids = []
+        for gid in raw_ids:
+            try:
+                game_ids.append(int(gid))
+            except (TypeError, ValueError):
+                pass
+        game_names: Dict[Any, str] = {}
+        if game_ids:
+            try:
+                from app.modules.game.models import Game
+                result = await self.db.execute(select(Game.id, Game.name).where(Game.id.in_(game_ids)))
+                for row in result.all():
+                    rid, rname = row[0], row[1]
+                    game_names[rid] = str(rname).strip() if rname else ""
+            except Exception as e:
+                logger.warning("Could not load game names for export: %s", e)
+
+        # Tên game để đặt tên file (khi export theo 1 game)
+        file_game_name: Optional[str] = None
+        if game_id is not None:
+            file_game_name = game_names.get(game_id) or game_names.get(int(game_id))
+
         # Tạo workbook
         workbook = openpyxl.Workbook()
         worksheet = workbook.active
         worksheet.title = "Game Glossary"
 
-        # Header
+        # Header (thêm cột game_name sau game_id)
         headers = [
             "id",
             "import_id",
@@ -281,6 +306,7 @@ class Game_GlossaryService:
             "translated_term",
             "language_pair",
             "game_id",
+            "game_name",
             "usage_count",
             "is_active",
             "created_at",
@@ -302,15 +328,18 @@ class Game_GlossaryService:
                 return dt_gmt7.strftime("%Y-%m-%d %H:%M:%S")
             return v
 
-        # Rows
+        # Rows (thêm cột game_name)
         for item in items:
+            gid = item.get("game_id")
+            gname = game_names.get(gid, "") if gid is not None else ""
             worksheet.append([
                 item.get("id"),
                 item.get("import_id"),
                 item.get("term"),
                 item.get("translated_term"),
                 item.get("language_pair"),
-                item.get("game_id"),
+                gid,
+                gname,
                 item.get("usage_count"),
                 item.get("is_active"),
                 _excel_safe_value(item.get("created_at")),
@@ -321,4 +350,4 @@ class Game_GlossaryService:
         output = io.BytesIO()
         workbook.save(output)
         output.seek(0)
-        return output.read()
+        return output.read(), file_game_name

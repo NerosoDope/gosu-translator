@@ -166,9 +166,10 @@ export default function TranslationFilePage() {
       setGameOptions((gRes?.data?.data ?? []).map((g: any) => ({ id: g.id, name: g.name })));
       setGameCategoryOptions((gcRes?.data?.items ?? []).map((c: any) => ({ id: c.id, name: c.name })));
 
-      const prompts = (pRes?.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
+      const prompts = (pRes?.data ?? []).map((p: any) => ({ id: p.id, name: p.name, is_default: p.is_default }));
       setPromptOptions(prompts);
-      // Auto-select prompt "Dịch nội dung" làm mặc định
+      const defaultPrompt = prompts.find((p: any) => p.is_default);
+      if (defaultPrompt) setPromptId(defaultPrompt.id);
     }).finally(() => {
       if (mounted) setLoadingConfig(false);
     });

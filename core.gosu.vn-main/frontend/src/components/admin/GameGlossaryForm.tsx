@@ -417,38 +417,39 @@ export default function GameGlossaryForm({ item, onSuccess, onCancel, gameId: pr
           )}
         </div>
 
-        {/* Game */}
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-            Game <span className="text-red-500">*</span>
-          </label>
-          <select
-            value={gameId}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-              setGameId(e.target.value);
-              validateGameId(e.target.value);
-            }}
-            className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${
-              gameIdError
-                ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
-                : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
-            } dark:bg-gray-700 dark:text-gray-100`}
-            required
-            disabled={!!propGameId} // Disable if propGameId is provided
-          >
-            <option value="">Chọn game</option>
-            {games.map((game: Game) => (
-              <option key={game.id} value={game.id.toString()}>
-                {game.name}
-              </option>
-            ))}
-          </select>
-          {gameIdError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
-              {gameIdError}
-            </p>
-          )}
-        </div>
+        {/* Game — chỉ hiện khi không có gameId từ context (thêm thuật ngữ từ nơi khác) */}
+        {propGameId == null && (
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Game <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={gameId}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                setGameId(e.target.value);
+                validateGameId(e.target.value);
+              }}
+              className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 transition-colors ${
+                gameIdError
+                  ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
+                  : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 focus:border-blue-500'
+              } dark:bg-gray-700 dark:text-gray-100`}
+              required
+            >
+              <option value="">Chọn game</option>
+              {games.map((game: Game) => (
+                <option key={game.id} value={game.id.toString()}>
+                  {game.name}
+                </option>
+              ))}
+            </select>
+            {gameIdError && (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                {gameIdError}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Usage Count */}
         <div className="space-y-2">

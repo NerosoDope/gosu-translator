@@ -68,6 +68,8 @@ export default function TranslateDemoPage() {
       .then((res: any) => {
         if (mounted && res?.data && Array.isArray(res.data)) {
           setPrompts(res.data);
+          const defaultP = res.data.find((p: any) => p.is_default);
+          if (defaultP) setSelectedPromptId(defaultP.id);
         }
       })
       .catch(() => {

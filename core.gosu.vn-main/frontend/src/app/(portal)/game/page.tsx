@@ -352,10 +352,13 @@ function GameContent() {
           type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         }
       );
+      const contentDisposition = response.headers?.['content-disposition'];
+      const filenameMatch = contentDisposition?.match(/filename="?([^";\n]+)"?/);
+      const downloadName = filenameMatch?.[1]?.trim() || `tu_dien_game_${selectedGameForGlossary.name || selectedGameForGlossary.id}.xlsx`;
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `game_glossary_game_${selectedGameForGlossary.id}.xlsx`;
+      link.download = downloadName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
