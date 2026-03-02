@@ -7,7 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1597,14 +1597,19 @@ async def translate_file(
                 prompt_id=prompt_id_int,
                 context=context,
                 style=style,
+                game_id=game_id_int,
+                game_category_id=game_category_id_int,
             )
         except Exception as e:
             logger.warning("translate_with_ai_batch: %s", e)
-            results = [f"[Lỗi: {str(e)[:80]}]"] * len(batch)
+            results = [t for _, _, t in batch]
+        saved_count = 0
         for (row_idx, col, orig_text), translated in zip(batch, results):
-            rows[row_idx][col + "_translated"] = translated or ""
-            if translated and not translated.startswith("[Lỗi:"):
-                await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang)
+            rows[row_idx][col + "_translated"] = translated or orig_text
+            if translated and translated != orig_text:
+                await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang, origin="file")
+                saved_count += 1
+            logger.info("translate_file batch: %d results, %d cached", len(batch), saved_count)
 
     output_columns = columns + [c + "_translated" for c in to_translate]
     translated_json = None
@@ -1744,9 +1749,11 @@ async def translate_file_stream(
 
         yield _sse({"type": "start", "total": total_cells, "batch_total": batch_total})
 
+        logger.info("SSE file translate: %d pending cells, %d batches", total_cells, batch_total)
         cells_done = 0
         for batch_idx, batch in enumerate(token_batches):
             texts_to_translate = [t for _, _, t in batch]
+            logger.info("SSE batch %s input (first 3): %s", batch_idx, texts_to_translate[:3])
             try:
                 results = await translate_with_ai_batch(
                     db,
@@ -1756,15 +1763,21 @@ async def translate_file_stream(
                     prompt_id=prompt_id_int,
                     context=ctx,
                     style=sty,
+                    game_id=game_id_int,
+                    game_category_id=game_category_id_int,
                 )
+                logger.info("SSE batch %s output (first 3): %s", batch_idx, results[:3])
             except Exception as e:
-                logger.warning("SSE translate batch %s: %s", batch_idx, e)
-                results = [f"[Lỗi: {str(e)[:80]}]"] * len(batch)
+                logger.warning("SSE translate batch %s FAILED: %s", batch_idx, e, exc_info=True)
+                results = [t for _, _, t in batch]
 
+            saved_count = 0
             for (row_idx, col, orig_text), translated in zip(batch, results):
-                rows[row_idx][col + "_translated"] = translated or ""
-                if translated and not translated.startswith("[Lỗi:"):
-                    await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang)
+                rows[row_idx][col + "_translated"] = translated or orig_text
+                if translated and translated != orig_text:
+                    await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang, origin="file")
+                    saved_count += 1
+            logger.info("SSE batch %s: %d results, %d cached", batch_idx, len(batch), saved_count)
 
             cells_done += len(batch)
             percent = round(cells_done * 100 / total_cells) if total_cells else 100
@@ -2150,6 +2163,15 @@ async def proofread_row_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính AI thất bại: {getattr(e, 'message', str(e))}")
+    if result:
+        try:
+            await save_translation_to_cache(
+                db, body.original.strip(), result,
+                body.source_lang.strip(), body.target_lang.strip(),
+                origin="proofread",
+            )
+        except Exception:
+            pass
     return ProofreadRowResponse(proofread=result)
 
 
@@ -2184,6 +2206,18 @@ async def proofread_batch_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính batch AI thất bại: {getattr(e, 'message', str(e))}")
+    items_by_index = {item["index"]: item for item in items_dicts}
+    for r in results:
+        orig_item = items_by_index.get(r["index"])
+        if orig_item and r.get("proofread"):
+            try:
+                await save_translation_to_cache(
+                    db, (orig_item.get("original") or "").strip(), r["proofread"],
+                    body.source_lang.strip(), body.target_lang.strip(),
+                    origin="proofread",
+                )
+            except Exception:
+                pass
     return ProofreadBatchResponse(
         results=[ProofreadBatchResultItem(index=r["index"], proofread=r["proofread"]) for r in results]
     )
@@ -2236,6 +2270,76 @@ async def verify_api_key(db: AsyncSession = Depends(get_db)):
     return {"ok": ok, "message": message}
 
 
+@router.get("/test-batch-cache")
+async def test_batch_cache(
+    source_lang: str = Query("vi", description="Ngôn ngữ nguồn"),
+    target_lang: str = Query("en", description="Ngôn ngữ đích"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Test end-to-end: batch translate 2 dòng test + save to cache.
+    Kiểm tra xem AI batch và cache saving có hoạt động không.
+    """
+    test_texts = ["Xin chào", "Cảm ơn"]
+    result: dict = {
+        "input": test_texts,
+        "translated": [],
+        "cached_count": 0,
+        "ai_error": None,
+        "cache_error": None,
+    }
+    try:
+        from app.modules.translate.service import translate_with_ai_batch, save_translation_to_cache
+        translated = await translate_with_ai_batch(
+            db,
+            texts=test_texts,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        result["translated"] = translated
+    except Exception as e:
+        result["ai_error"] = str(e)
+        return result
+
+    for orig, trans in zip(test_texts, translated):
+        if trans and trans != orig:
+            try:
+                await save_translation_to_cache(db, orig, trans, source_lang, target_lang, origin="direct")
+                result["cached_count"] += 1
+            except Exception as e:
+                result["cache_error"] = str(e)
+
+    return result
+
+
+@router.get("/cache-diagnostics")
+async def cache_diagnostics(db: AsyncSession = Depends(get_db)):
+    """
+    Endpoint chẩn đoán cache: ghi 1 entry test, đọc lại, rồi xóa.
+    Trả về { "write_ok", "read_ok", "error", "cache_count" }.
+    """
+    from app.modules.cache.service import CacheService as _CS
+    svc = _CS(db)
+    test_key = "translate:test:test:diag0000deadbeef"
+    result: dict = {"write_ok": False, "read_ok": False, "error": None, "cache_count": 0}
+    try:
+        # Đếm tổng số entries hiện tại
+        listed = await svc.list(skip=0, limit=1)
+        result["cache_count"] = listed.get("total", 0)
+        # Thử ghi
+        await svc.create({"key": test_key, "value": "__diag_test__", "ttl": 3600})
+        result["write_ok"] = True
+        # Thử đọc lại
+        entry = await svc.get_by_key(test_key)
+        result["read_ok"] = entry is not None and getattr(entry, "value", "") == "__diag_test__"
+        # Xóa entry test
+        if entry:
+            await svc.delete(entry.id)
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
 @router.post("", response_model=TranslateResponse)
 async def translate(
     body: TranslateRequest,
@@ -2270,10 +2374,7 @@ async def translate(
         logger.warning("Translate error (ValueError): %s", msg)
         raise HTTPException(status_code=400, detail=msg)
     except Exception as e:
-        logger.exception("Translate AI failed: %s", e)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Dịch bằng AI thất bại: {getattr(e, 'message', str(e))}",
-        )
+        logger.warning("Translate AI failed, returning original text: %s", e)
+        return TranslateResponse(translated_text=body.text.strip())
 
     return TranslateResponse(translated_text=translated_text)

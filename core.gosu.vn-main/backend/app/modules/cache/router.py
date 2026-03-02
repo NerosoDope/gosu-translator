@@ -15,26 +15,28 @@ async def list_cache(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     query: Optional[str] = Query(None, description="Tìm theo key"),
+    origin: Optional[str] = Query(None, description="Lọc theo nguồn: direct | file | proofread"),
     sort_by: str = Query("id", description="Sắp xếp theo cột"),
     sort_order: str = Query("asc", description="asc | desc"),
     db: AsyncSession = Depends(get_db),
 ):
-    """List cache với phân trang, tìm kiếm, sắp xếp. Trả về { items, total, page, per_page, pages }."""
+    """List cache với phân trang, tìm kiếm, lọc nguồn, sắp xếp. Trả về { items, total, page, per_page, pages }."""
     service = CacheService(db)
     return await service.list(
-        skip=skip, limit=limit, query=query, sort_by=sort_by, sort_order=sort_order
+        skip=skip, limit=limit, query=query, origin=origin, sort_by=sort_by, sort_order=sort_order
     )
 
 
 @router.get("/export/excel")
 async def export_cache_excel(
     query: Optional[str] = Query(None),
+    origin: Optional[str] = Query(None, description="Lọc theo nguồn: direct | file | proofread"),
     db: AsyncSession = Depends(get_db),
 ):
     """Export danh sách cache ra file Excel."""
     service = CacheService(db)
     try:
-        excel_bytes = await service.export_excel(query=query)
+        excel_bytes = await service.export_excel(query=query, origin=origin)
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

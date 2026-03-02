@@ -9,11 +9,18 @@ import Button from '@/components/ui/Button';
 import { cacheAPI } from '@/lib/api';
 import { useToastContext } from '@/context/ToastContext';
 
+const ORIGIN_LABELS: Record<string, string> = {
+  direct: 'Dịch trực tiếp',
+  file: 'Dịch file',
+  proofread: 'Hiệu đính',
+};
+
 interface CacheItem {
   id: number;
   key: string;
   value: string;
   ttl?: number | null;
+  origin?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -30,6 +37,7 @@ function CachePageContent() {
     pages: 0,
   });
   const [search, setSearch] = useState('');
+  const [originFilter, setOriginFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<string>('id');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [exporting, setExporting] = useState(false);
@@ -47,6 +55,7 @@ function CachePageContent() {
         sort_order: sortOrder,
       };
       if (search.trim()) params.query = search.trim();
+      if (originFilter) params.origin = originFilter;
       const res = await cacheAPI.getList(params);
       const data = res.data;
       if (data && typeof data === 'object' && Array.isArray(data.items)) {
@@ -76,7 +85,7 @@ function CachePageContent() {
 
   useEffect(() => {
     loadCache();
-  }, [pagination.page, pagination.per_page, search, sortBy, sortOrder]);
+  }, [pagination.page, pagination.per_page, search, originFilter, sortBy, sortOrder]);
 
   const handleSort = (columnKey: string | null, direction: 'asc' | 'desc' | null) => {
     if (columnKey == null) {
@@ -98,7 +107,9 @@ function CachePageContent() {
   const handleExportExcel = async () => {
     try {
       setExporting(true);
-      const params = search.trim() ? { query: search.trim() } : {};
+      const params: Record<string, string> = {};
+      if (search.trim()) params.query = search.trim();
+      if (originFilter) params.origin = originFilter;
       const res = await cacheAPI.exportExcel(params);
       const blob = new Blob([res.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -166,6 +177,16 @@ function CachePageContent() {
       ),
     },
     {
+      key: 'origin',
+      header: 'Nguồn',
+      sortable: false,
+      render: (row: CacheItem) => (
+        <span className="text-sm text-gray-600 dark:text-gray-400">
+          {row.origin ? (ORIGIN_LABELS[row.origin] ?? row.origin) : '—'}
+        </span>
+      ),
+    },
+    {
       key: 'ttl',
       header: 'TTL',
       sortable: true,
@@ -220,16 +241,32 @@ function CachePageContent() {
         onSearchChange={setSearch}
         searchPlaceholder="Tìm theo key..."
         filters={
-          <select
-            value={pagination.per_page}
-            onChange={(e) => setPagination(prev => ({ ...prev, per_page: Number(e.target.value), page: 1 }))}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-          >
-            <option value={5}>5 / trang</option>
-            <option value={10}>10 / trang</option>
-            <option value={20}>20 / trang</option>
-            <option value={50}>50 / trang</option>
-          </select>
+          <>
+            <select
+              value={originFilter}
+              onChange={(e) => {
+                setOriginFilter(e.target.value);
+                setPagination(prev => ({ ...prev, page: 1 }));
+              }}
+              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              title="Lọc theo nguồn"
+            >
+              <option value="">Tất cả nguồn</option>
+              <option value="direct">Dịch trực tiếp</option>
+              <option value="file">Dịch file</option>
+              <option value="proofread">Hiệu đính</option>
+            </select>
+            <select
+              value={pagination.per_page}
+              onChange={(e) => setPagination(prev => ({ ...prev, per_page: Number(e.target.value), page: 1 }))}
+              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            >
+              <option value={5}>5 / trang</option>
+              <option value={10}>10 / trang</option>
+              <option value={20}>20 / trang</option>
+              <option value={50}>50 / trang</option>
+            </select>
+          </>
         }
       />
 

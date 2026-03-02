@@ -4,8 +4,12 @@ Prompt dịch thuật lấy từ bảng prompts (quản lý prompts) nếu truy�
 Batch mode: gộp nhiều đoạn thành 1 lần gọi AI để giảm chi phí.
 """
 import hashlib
+import logging
+import re
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.modules.settings.service import SettingsService
 from app.modules.prompts.service import PromptsService
@@ -15,17 +19,97 @@ from app.modules.game_glossary.service import Game_GlossaryService
 from app.modules.global_glossary.service import Global_GlossaryService
 
 
-DEFAULT_SYSTEM_PROMPT = """You are a professional translator. Translate the following text from {source_lang} to {target_lang}.
-Preserve tone, format and line breaks. Output only the translation, no explanation or prefix."""
+DEFAULT_SYSTEM_PROMPT = """Bạn là một dịch giả {source_lang} chuyên nghiệp, có nhiều năm kinh nghiệm trong lĩnh vực dịch thuật văn học, kỹ thuật và kịch bản game.
+
+Nhiệm vụ của bạn là dịch các đoạn văn {source_lang} sang {target_lang}, giữ nguyên giọng điệu, định dạng và xuống dòng của nội dung gốc.
+Chỉ trả về bản dịch, không giải thích, không thêm tiền tố hay hậu tố."""
 
 # TTL cache mặc định (giây) khi lưu bản dịch AI
 TRANSLATE_CACHE_TTL = 86400
 
+# Số thuật ngữ tối đa inject vào prompt (game glossary + global glossary)
+GLOSSARY_PROMPT_MAX_TERMS = 60
 
-def _cache_key(source_lang: str, target_lang: str, text: str) -> str:
-    """Tạo cache key bằng SHA-256 của toàn bộ text (chuẩn hóa whitespace).
-    Dùng 16 ký tự hex đầu (64-bit) — xác suất collision gần như bằng 0 ở quy mô thực tế.
+
+async def _fetch_glossary_terms(
+    db: AsyncSession,
+    source_lang: str,
+    target_lang: str,
+    game_id: Optional[int] = None,
+    game_category_id: Optional[int] = None,
+    max_terms: int = GLOSSARY_PROMPT_MAX_TERMS,
+) -> List[Tuple[str, str]]:
+    """Fetch danh sách thuật ngữ (game glossary + global glossary) để inject vào prompt AI.
+    Game glossary ưu tiên trước, global glossary bổ sung sau. Giới hạn max_terms để tránh prompt quá dài.
     """
+    from sqlalchemy import select as _select
+    from app.modules.game_glossary.models import Game_Glossary
+    from app.modules.global_glossary.models import Global_Glossary
+
+    language_pair = f"{source_lang.strip()}-{target_lang.strip()}"
+    terms: List[Tuple[str, str]] = []
+
+    # 1. Game glossary — ưu tiên thuật ngữ đặc thù của game
+    if game_id is not None:
+        result = await db.execute(
+            _select(Game_Glossary.term, Game_Glossary.translated_term)
+            .where(
+                Game_Glossary.game_id == game_id,
+                Game_Glossary.language_pair == language_pair,
+                Game_Glossary.is_active == True,
+            )
+            .limit(max_terms)
+        )
+        terms.extend((r.term, r.translated_term) for r in result.all())
+
+    # 2. Global glossary — bổ sung thuật ngữ chung nếu còn chỗ
+    remaining = max_terms - len(terms)
+    if remaining > 0:
+        conditions = [
+            Global_Glossary.language_pair == language_pair,
+            Global_Glossary.is_active == True,
+        ]
+        if game_category_id is not None:
+            conditions.append(Global_Glossary.game_category_id == game_category_id)
+        result = await db.execute(
+            _select(Global_Glossary.term, Global_Glossary.translated_term)
+            .where(*conditions)
+            .limit(remaining)
+        )
+        terms.extend((r.term, r.translated_term) for r in result.all())
+
+    return terms
+
+
+def _glossary_prompt_section(terms: List[Tuple[str, str]]) -> str:
+    """Tạo đoạn prompt mô tả bảng thuật ngữ cần dùng nhất quán."""
+    if not terms:
+        return ""
+    lines = "\n".join(f"- {t}: {tr}" for t, tr in terms)
+    return (
+        "\n\nBảng thuật ngữ — hãy dịch các thuật ngữ sau một cách nhất quán "
+        "(ưu tiên các bản dịch này hơn lựa chọn mặc định của bạn):\n" + lines
+    )
+
+
+# Nguồn tạo cache (mã hóa trong key): direct | file | proofread
+CACHE_ORIGIN_DIRECT = "direct"
+CACHE_ORIGIN_FILE = "file"
+CACHE_ORIGIN_PROOFREAD = "proofread"
+
+
+def _cache_key(source_lang: str, target_lang: str, text: str, origin: str = CACHE_ORIGIN_DIRECT) -> str:
+    """Tạo cache key: translate:{origin}:{source_lang}:{target_lang}:{digest}.
+    Ví dụ: translate:file:vi:en:a92c6a62b6916675
+    """
+    normalized = " ".join((text.strip() or "").split())
+    raw = f"{source_lang}|{target_lang}|{normalized}".encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:16]
+    return f"translate:{origin}:{source_lang}:{target_lang}:{digest}"
+
+
+def _cache_key_legacy(source_lang: str, target_lang: str, text: str) -> str:
+    """Key cũ không có origin (tương thích ngược)."""
     normalized = " ".join((text.strip() or "").split())
     raw = f"{source_lang}|{target_lang}|{normalized}".encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()[:16]
@@ -84,6 +168,8 @@ async def translate_with_ai(
     prompt_id: Optional[int] = None,
     context: Optional[str] = None,
     style: Optional[str] = None,
+    game_id: Optional[int] = None,
+    game_category_id: Optional[int] = None,
 ) -> str:
     settings_svc = SettingsService(db)
     api_key_setting = await settings_svc.get_setting_by_key("gemini_api_key")
@@ -110,15 +196,36 @@ async def translate_with_ai(
         prompt_obj = await prompts_svc.get(prompt_id)
         if prompt_obj and getattr(prompt_obj, "content", None):
             raw = prompt_obj.content or ""
+            # Thay {style_instructions}: nếu style rỗng, xóa luôn khoảng trắng dư xung quanh placeholder
+            style_str = style or ""
+            if style_str:
+                styled = raw.replace("{style_instructions}", style_str)
+            else:
+                styled = re.sub(r"\s*\{style_instructions\}\s*", " ", raw).strip()
             system_content = (
-                raw.replace("{source_lang}", source_name)
+                styled
+                .replace("{source_lang}", source_name)
                 .replace("{target_lang}", target_name)
-                .replace("{style_instructions}", style or "")
             )
+            # Chỉ append style nếu prompt KHÔNG dùng {style_instructions}
+            if style_str and "{style_instructions}" not in raw:
+                system_content += f"\n\nPhong cách dịch: {style_str}"
+    else:
+        # Prompt mặc định: không có {style_instructions}, append style riêng
+        if style:
+            system_content += f"\n\nPhong cách dịch: {style}"
     if context:
-        system_content += f"\n\nNgữ cảnh / Context: {context}"
-    if style:
-        system_content += f"\n\nPhong cách dịch / Style: {style}"
+        system_content += f"\n\nNgữ cảnh: {context}"
+
+    # Inject từ điển game/global vào prompt để AI dịch nhất quán
+    if game_id is not None or game_category_id is not None:
+        try:
+            glossary_terms = await _fetch_glossary_terms(
+                db, source_lang, target_lang, game_id, game_category_id
+            )
+            system_content += _glossary_prompt_section(glossary_terms)
+        except Exception:
+            pass  # Không để lỗi fetch glossary làm gián đoạn bản dịch
 
     user_content = text
 
@@ -156,11 +263,11 @@ _BATCH_SEP = "|||SEGMENT|||"
 
 # Prompt batch: yêu cầu AI dịch từng dòng, giữ nguyên cấu trúc đánh số
 _BATCH_SYSTEM_PROMPT = (
-    "You are a professional translator. Translate EACH numbered line from {source_lang} to {target_lang}. "
-    "Return ONLY the translated lines in the same numbered format. "
-    "Do NOT add explanations, notes, or extra text. "
-    "Preserve placeholders like {{variable}}, %s, %d exactly as-is.\n"
-    "Format:\n1. <translated line 1>\n2. <translated line 2>\n..."
+    "Bạn là một dịch giả {source_lang} chuyên nghiệp. "
+    "Hãy dịch TỪNG dòng được đánh số từ {source_lang} sang {target_lang}. "
+    "Chỉ trả về các dòng đã dịch theo đúng định dạng đánh số, không giải thích, không thêm văn bản nào khác. "
+    "Giữ nguyên các placeholder như {{variable}}, %s, %d, {{0}} không thay đổi.\n"
+    "Định dạng trả về:\n1. <dòng dịch 1>\n2. <dòng dịch 2>\n..."
 )
 
 
@@ -172,6 +279,8 @@ async def translate_with_ai_batch(
     prompt_id: Optional[int] = None,
     context: Optional[str] = None,
     style: Optional[str] = None,
+    game_id: Optional[int] = None,
+    game_category_id: Optional[int] = None,
 ) -> List[str]:
     """
     Gộp nhiều đoạn text thành 1 lần gọi AI (numbered list). Trả về list kết quả cùng thứ tự.
@@ -197,15 +306,40 @@ async def translate_with_ai_batch(
         prompt_obj = await prompts_svc.get(prompt_id)
         if prompt_obj and getattr(prompt_obj, "content", None):
             raw = prompt_obj.content or ""
+            style_str = style or ""
+            if style_str:
+                styled = raw.replace("{style_instructions}", style_str)
+            else:
+                styled = re.sub(r"\s*\{style_instructions\}\s*", " ", raw).strip()
             system_content = (
-                raw.replace("{source_lang}", source_name)
+                styled
+                .replace("{source_lang}", source_name)
                 .replace("{target_lang}", target_name)
-                .replace("{style_instructions}", style or "")
             )
+            if style_str and "{style_instructions}" not in raw:
+                system_content += f"\n\nPhong cách dịch: {style_str}"
+            # Luôn thêm hướng dẫn định dạng batch — custom prompt không có phần này
+            system_content += (
+                "\n\nHãy dịch TỪNG dòng được đánh số từ "
+                f"{source_name} sang {target_name}. "
+                "Định dạng trả về (bắt buộc):\n1. <dòng dịch 1>\n2. <dòng dịch 2>\n..."
+                "\nChỉ trả về các dòng đã dịch theo đúng định dạng đánh số, không giải thích."
+            )
+    else:
+        if style:
+            system_content += f"\n\nPhong cách dịch: {style}"
     if context:
-        system_content += f"\n\nNgữ cảnh / Context: {context}"
-    if style:
-        system_content += f"\n\nPhong cách dịch / Style: {style}"
+        system_content += f"\n\nNgữ cảnh: {context}"
+
+    # Inject từ điển vào prompt một lần cho toàn bộ batch — tránh N lần DB call
+    if game_id is not None or game_category_id is not None:
+        try:
+            glossary_terms = await _fetch_glossary_terms(
+                db, source_lang, target_lang, game_id, game_category_id
+            )
+            system_content += _glossary_prompt_section(glossary_terms)
+        except Exception:
+            pass
 
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
 
@@ -226,22 +360,35 @@ async def translate_with_ai_batch(
             ),
         )
         raw_output = (response.text or "").strip()
+        logger.info("AI batch raw_output (first 300 chars): %s", raw_output[:300])
     except Exception as e:
         err_str = str(e).lower()
         status = getattr(e, "status_code", None) or getattr(e, "http_status", None)
         if status == 429 or "429" in err_str or "quota" in err_str or "resource exhausted" in err_str:
             raise ValueError("Đã hết hạn mức sử dụng Gemini (429).")
+        logger.error("AI batch call failed: %s", e)
         raise
 
-    # Parse output: mỗi dòng dạng "N. <nội dung>" → dict {index: text}
+    # Parse output: mỗi dòng dạng "N. <nội dung>" hoặc "N) <nội dung>" → dict {index: text}
+    # Cũng xử lý markdown bold: "**N.** text" hoặc "**N.**text"
     import re as _re
     parsed: Dict[int, str] = {}
     for line in raw_output.splitlines():
         line = line.strip()
-        m = _re.match(r"^(\d+)\.\s*(.*)", line)
+        # Xóa markdown bold nếu có: **1.** → 1.
+        line = _re.sub(r"^\*+(\d+)[.)]\*+\s*", r"\1. ", line)
+        m = _re.match(r"^(\d+)[.)]\s*(.*)", line)
         if m:
             idx = int(m.group(1))
-            parsed[idx] = m.group(2).strip()
+            val = m.group(2).strip()
+            if val:  # Chỉ lưu nếu có nội dung thực
+                parsed[idx] = val
+
+    logger.info("AI batch parsed %d/%d items", len(parsed), len(texts))
+    if len(parsed) < len(texts):
+        missing = [i + 1 for i in range(len(texts)) if (i + 1) not in parsed]
+        logger.warning("AI batch missing indices %s — falling back to orig for those", missing)
+
     # Điền kết quả theo thứ tự gốc; nếu thiếu thì trả chuỗi gốc
     results = []
     for i, orig in enumerate(texts):
@@ -268,10 +415,16 @@ async def translate_check_only(
 
     language_pair = f"{source_lang.strip()}-{target_lang.strip()}"
     cache_svc = CacheService(db)
-    key = _cache_key(source_lang, target_lang, text)
-    cached = await cache_svc.get_by_key(key)
-    if cached and getattr(cached, "value", None):
-        return (cached.value or "").strip()
+    # Ưu tiên: proofread (đã hiệu đính) > direct (dịch trực tiếp) > file (dịch file) > key cũ
+    for key in (
+        _cache_key(source_lang, target_lang, text, CACHE_ORIGIN_PROOFREAD),
+        _cache_key(source_lang, target_lang, text, CACHE_ORIGIN_DIRECT),
+        _cache_key(source_lang, target_lang, text, CACHE_ORIGIN_FILE),
+        _cache_key_legacy(source_lang, target_lang, text),
+    ):
+        cached = await cache_svc.get_by_key(key)
+        if cached and getattr(cached, "value", None):
+            return (cached.value or "").strip()
 
     game_glossary_svc = Game_GlossaryService(db)
     game_trans = await game_glossary_svc.find_translation(
@@ -296,22 +449,22 @@ async def save_translation_to_cache(
     translated: str,
     source_lang: str,
     target_lang: str,
+    origin: Optional[str] = None,
 ) -> None:
     """
-    Upsert 1 cặp bản dịch vào cache.
-    Skip nếu key đã tồn tại với value giống nhau (tránh ghi thừa).
-    Rollback session nếu lỗi để tránh ảnh hưởng transaction tiếp theo.
+    Upsert 1 cặp bản dịch vào cache. Nguồn được mã hóa trong key: translate:{origin}:...
+    origin: direct | file | proofread (mặc định direct).
     """
     if not translated:
         return
-    key = _cache_key(source_lang, target_lang, text)
+    origin = (origin or CACHE_ORIGIN_DIRECT).strip() or CACHE_ORIGIN_DIRECT
+    key = _cache_key(source_lang, target_lang, text, origin)
     cache_svc = CacheService(db)
+    payload = {"key": key, "value": translated, "ttl": TRANSLATE_CACHE_TTL}
     try:
-        existing = await cache_svc.get_by_key(key)
-        if existing and getattr(existing, "value", None) == translated:
-            return
-        await cache_svc.create({"key": key, "value": translated, "ttl": TRANSLATE_CACHE_TTL})
-    except Exception:
+        await cache_svc.create(payload)
+    except Exception as e:
+        logger.warning("save_translation_to_cache failed key=%s: %s", key[:40], e)
         try:
             await db.rollback()
         except Exception:
@@ -328,10 +481,12 @@ async def translate_with_priority(
     style: Optional[str] = None,
     game_id: Optional[int] = None,
     game_category_id: Optional[int] = None,
+    quality_check: bool = False,
 ) -> str:
     """
     Dịch theo thứ tự ưu tiên: 1.Cache 2.Từ điển game 3.Từ điển chung 4.AI (và lưu cache).
     game_id/game_category_id để lọc từ điển theo game/thể loại cụ thể.
+    quality_check=True: kiểm tra chất lượng sau dịch, tự động dịch lại nếu score < 60.
     """
     hit = await translate_check_only(
         db, text, source_lang, target_lang,
@@ -349,9 +504,46 @@ async def translate_with_priority(
         prompt_id=prompt_id,
         context=context,
         style=style,
+        game_id=game_id,
+        game_category_id=game_category_id,
     )
 
-    await save_translation_to_cache(db, text, translated, source_lang, target_lang)
+    # Kiểm tra chất lượng và tự động dịch lại nếu cần
+    if quality_check and translated:
+        from app.modules.quality_check.service import check_quality as _check_quality
+        glossary_terms: Optional[List[Tuple[str, str]]] = None
+        if game_id is not None or game_category_id is not None:
+            try:
+                glossary_terms = await _fetch_glossary_terms(
+                    db, source_lang, target_lang, game_id, game_category_id
+                )
+            except Exception:
+                pass
+
+        qr = _check_quality(text, translated, source_lang, target_lang, glossary_terms)
+        if qr.should_retranslate:
+            issues_hint = "; ".join(i.message for i in qr.issues[:3])
+            retry_context = f"{context}\nLưu ý cải thiện: {issues_hint}" if context else f"Lưu ý cải thiện: {issues_hint}"
+            try:
+                retranslated = await translate_with_ai(
+                    db,
+                    text=text,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    prompt_id=prompt_id,
+                    context=retry_context,
+                    style=style,
+                    game_id=game_id,
+                    game_category_id=game_category_id,
+                )
+                if retranslated and retranslated != translated:
+                    retry_qr = _check_quality(text, retranslated, source_lang, target_lang, glossary_terms)
+                    if retry_qr.score >= qr.score:
+                        translated = retranslated
+            except Exception:
+                pass  # Giữ bản dịch gốc nếu retry thất bại
+
+    await save_translation_to_cache(db, text, translated, source_lang, target_lang, origin="direct")
     return translated or ""
 
 
@@ -360,25 +552,25 @@ async def translate_with_priority(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PROOFREAD_SYSTEM_PROMPT = (
-    "You are a professional translator and proofreader. "
-    "Review the provided translation and improve it if necessary. "
-    "Source language: {source_lang}. Target language: {target_lang}. "
-    "Output ONLY the improved translation text. "
-    "If the translation is already accurate and natural, return it as-is. "
-    "Do NOT add explanations, comments, or notes."
+    "Bạn là một dịch giả và hiệu đính viên {source_lang} chuyên nghiệp. "
+    "Hãy xem xét bản dịch được cung cấp và cải thiện nếu cần thiết. "
+    "Ngôn ngữ nguồn: {source_lang}. Ngôn ngữ đích: {target_lang}. "
+    "Chỉ trả về bản dịch đã được cải thiện. "
+    "Nếu bản dịch đã chính xác và tự nhiên, hãy trả về nguyên văn. "
+    "Không giải thích, không thêm nhận xét hay ghi chú."
 )
 
 _PROOFREAD_BATCH_SYSTEM_PROMPT = (
-    "You are a professional translator and proofreader. "
-    "Review and improve the following translations. "
-    "Source: {source_lang}. Target: {target_lang}. "
-    "For each numbered item you receive:\n"
-    "  Original: <source text>\n"
-    "  Current: <existing translation>\n"
-    "Return ONLY the improved translations in numbered format:\n"
-    "1. <improved translation>\n2. <improved translation>\n...\n"
-    "If a translation is already correct and natural, return it as-is. "
-    "Do NOT add explanations or extra text."
+    "Bạn là một dịch giả và hiệu đính viên {source_lang} chuyên nghiệp. "
+    "Hãy xem xét và cải thiện các bản dịch sau đây. "
+    "Ngôn ngữ nguồn: {source_lang}. Ngôn ngữ đích: {target_lang}. "
+    "Với mỗi mục được đánh số bạn nhận được:\n"
+    "  Original: <văn bản gốc>\n"
+    "  Current: <bản dịch hiện tại>\n"
+    "Chỉ trả về các bản dịch đã cải thiện theo định dạng đánh số:\n"
+    "1. <bản dịch đã cải thiện>\n2. <bản dịch đã cải thiện>\n...\n"
+    "Nếu bản dịch đã chính xác và tự nhiên, hãy trả về nguyên văn. "
+    "Không giải thích, không thêm văn bản nào khác."
 )
 
 
@@ -419,11 +611,11 @@ async def proofread_with_ai(
                 .replace("{style_instructions}", style or "")
             )
     if context:
-        system_content += f"\n\nNgữ cảnh / Context: {context}"
+        system_content += f"\n\nNgữ cảnh: {context}"
     if style:
-        system_content += f"\n\nPhong cách / Style: {style}"
+        system_content += f"\n\nPhong cách dịch: {style}"
 
-    user_content = f"Original: {original}\nCurrent: {translated}"
+    user_content = f"Bản gốc: {original}\nBản dịch hiện tại: {translated}"
 
     try:
         from google import genai
@@ -483,12 +675,12 @@ async def proofread_with_ai_batch(
         source_lang=source_name, target_lang=target_name
     )
     if context:
-        system_content += f"\n\nNgữ cảnh / Context: {context}"
+        system_content += f"\n\nNgữ cảnh: {context}"
     if style:
-        system_content += f"\n\nPhong cách / Style: {style}"
+        system_content += f"\n\nPhong cách dịch: {style}"
 
     numbered = "\n".join(
-        f"{i+1}.\n  Original: {item['original']}\n  Current: {item['translated']}"
+        f"{i+1}.\n  Bản gốc: {item['original']}\n  Bản dịch hiện tại: {item['translated']}"
         for i, item in enumerate(items)
     )
 

@@ -1,8 +1,10 @@
+import logging
 from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, text as sa_text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select, func, delete, update, text as sa_text
 from .models import Cache
+
+logger = logging.getLogger(__name__)
 
 class CacheRepository:
     def __init__(self, db: AsyncSession):
@@ -13,19 +15,24 @@ class CacheRepository:
         skip: int = 0,
         limit: int = 20,
         query_str: Optional[str] = None,
+        origin: Optional[str] = None,
         sort_by: str = "id",
         sort_order: str = "asc",
     ) -> Tuple[List[Cache], int]:
-        """List cache with optional search on key. Returns (items, total)."""
+        """List cache with optional search on key and filter by origin. Returns (items, total)."""
         q = select(Cache)
         if query_str and query_str.strip():
             term = f"%{query_str.strip()}%"
             q = q.where(Cache.key.ilike(term))
+        if origin and origin.strip():
+            q = q.where(Cache.key.like(f"translate:{origin.strip():s}:%"))
         order_col = getattr(Cache, sort_by, Cache.id)
         q = q.order_by(order_col.desc() if sort_order == "desc" else order_col.asc())
         count_q = select(func.count()).select_from(Cache)
         if query_str and query_str.strip():
             count_q = count_q.where(Cache.key.ilike(term))
+        if origin and origin.strip():
+            count_q = count_q.where(Cache.key.like(f"translate:{origin.strip():s}:%"))
         total = (await self.db.execute(count_q)).scalar() or 0
         result = await self.db.execute(q.offset(skip).limit(limit))
         return result.scalars().all(), total
@@ -33,6 +40,7 @@ class CacheRepository:
     async def list_all(
         self,
         query_str: Optional[str] = None,
+        origin: Optional[str] = None,
         sort_by: str = "id",
         sort_order: str = "asc",
         limit: int = 100000,
@@ -41,6 +49,8 @@ class CacheRepository:
         q = select(Cache)
         if query_str and query_str.strip():
             q = q.where(Cache.key.ilike(f"%{query_str.strip()}%"))
+        if origin and origin.strip():
+            q = q.where(Cache.key.like(f"translate:{origin.strip():s}:%"))
         order_col = getattr(Cache, sort_by, Cache.id)
         q = q.order_by(order_col.desc() if sort_order == "desc" else order_col.asc())
         result = await self.db.execute(q.limit(limit))
@@ -59,8 +69,9 @@ class CacheRepository:
             select(Cache).where(
                 Cache.key == key,
                 # Chưa hết hạn theo ttl rõ ràng hoặc mặc định 1 ngày
+                # Dùng ::text cast vì ttl là BigInteger, không dùng || trực tiếp với string
                 (Cache.ttl.isnot(None) & (
-                    Cache.created_at + sa_text("(cache.ttl || ' seconds')::interval") > func.now()
+                    Cache.created_at + sa_text("(cache.ttl::text || ' seconds')::interval") > func.now()
                 ))
                 |
                 (Cache.ttl.is_(None) & (
@@ -72,28 +83,47 @@ class CacheRepository:
 
     async def create(self, data: Dict[str, Any]) -> Cache:
         """
-        Upsert cache entry: INSERT ... ON CONFLICT (key) DO UPDATE SET value, ttl
-        chỉ khi value thực sự thay đổi (tránh ghi thừa gây phình DB).
+        Upsert cache entry theo cách thông thường (không dùng ON CONFLICT để tránh
+        phụ thuộc vào tên unique constraint của PostgreSQL).
+        - Nếu key đã tồn tại: cập nhật value, ttl, reset created_at để gia hạn TTL.
+        - Nếu chưa tồn tại: tạo mới.
         """
-        from sqlalchemy import text as sa_text
-        stmt = (
-            pg_insert(Cache)
-            .values(**data)
-            .on_conflict_do_update(
-                index_elements=["key"],
-                set_={
-                    "value": data.get("value"),
-                    "ttl": data.get("ttl"),
-                    "updated_at": sa_text("now()"),
-                },
-                where=Cache.value != data.get("value"),
-            )
-            .returning(Cache)
-        )
-        result = await self.db.execute(stmt)
-        await self.db.commit()
-        row = result.fetchone()
-        return row[0] if row else Cache(**data)
+        key = data.get("key")
+        try:
+            # Tìm entry hiện tại (kể cả đã hết hạn) theo key
+            result = await self.db.execute(select(Cache).where(Cache.key == key))
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Cập nhật và reset created_at để gia hạn TTL
+                await self.db.execute(
+                    update(Cache)
+                    .where(Cache.key == key)
+                    .values(
+                        value=data.get("value"),
+                        ttl=data.get("ttl"),
+                        created_at=func.now(),
+                        updated_at=func.now(),
+                    )
+                )
+                await self.db.commit()
+                logger.debug("Cache updated key=%s", (key or "")[:40])
+                return existing
+            else:
+                cache = Cache(
+                    key=data.get("key"),
+                    value=data.get("value"),
+                    ttl=data.get("ttl"),
+                )
+                self.db.add(cache)
+                await self.db.commit()
+                await self.db.refresh(cache)
+                logger.debug("Cache created key=%s", (key or "")[:40])
+                return cache
+        except Exception as e:
+            logger.error("Cache create failed key=%s: %s", (key or "")[:40], e)
+            await self.db.rollback()
+            raise
 
     async def update(self, id: int, data: Dict[str, Any]) -> Optional[Cache]:
         result = await self.db.execute(select(Cache).where(Cache.id == id))
@@ -126,7 +156,7 @@ class CacheRepository:
             .where(
                 # ttl có giá trị rõ ràng: hết hạn theo ttl
                 (Cache.ttl.isnot(None) & (
-                    Cache.created_at + sa_text("(cache.ttl || ' seconds')::interval") <= func.now()
+                    Cache.created_at + sa_text("(cache.ttl::text || ' seconds')::interval") <= func.now()
                 ))
                 |
                 # ttl NULL: dùng mặc định 1 ngày

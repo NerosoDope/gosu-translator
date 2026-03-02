@@ -4,12 +4,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .repository import CacheRepository
 from .models import Cache
 
+def _origin_from_key(key: str) -> Optional[str]:
+    """Lấy nguồn từ key: translate:file:vi:en:hash -> file."""
+    if not key or not key.startswith("translate:"):
+        return None
+    parts = key.split(":", 4)
+    if len(parts) >= 5 and parts[1] in ("direct", "file", "proofread"):
+        return parts[1]
+    return None
+
+
 def _cache_to_dict(c: Cache) -> Dict[str, Any]:
     return {
         "id": c.id,
         "key": c.key,
         "value": c.value,
         "ttl": c.ttl,
+        "origin": _origin_from_key(c.key),
         "created_at": c.created_at,
         "updated_at": c.updated_at,
     }
@@ -23,12 +34,13 @@ class CacheService:
         skip: int = 0,
         limit: int = 20,
         query: Optional[str] = None,
+        origin: Optional[str] = None,
         sort_by: str = "id",
         sort_order: str = "asc",
     ) -> Dict[str, Any]:
-        """List cache with search and pagination. Returns { items, total, page, per_page, pages }."""
+        """List cache with search, origin filter and pagination. Returns { items, total, page, per_page, pages }."""
         items, total = await self.repo.list(
-            skip=skip, limit=limit, query_str=query, sort_by=sort_by, sort_order=sort_order
+            skip=skip, limit=limit, query_str=query, origin=origin, sort_by=sort_by, sort_order=sort_order
         )
         pages = (total + limit - 1) // limit if limit else 0
         page = (skip // limit) + 1 if limit else 1
@@ -40,17 +52,17 @@ class CacheService:
             "pages": pages,
         }
 
-    async def export_excel(self, query: Optional[str] = None) -> bytes:
+    async def export_excel(self, query: Optional[str] = None, origin: Optional[str] = None) -> bytes:
         """Export cache to Excel. Returns bytes of .xlsx file."""
         try:
             import openpyxl
         except ImportError:
             raise
-        items = await self.repo.list_all(query_str=query, limit=100000)
+        items = await self.repo.list_all(query_str=query, origin=origin, limit=100000)
         workbook = openpyxl.Workbook()
         worksheet = workbook.active
         worksheet.title = "Cache"
-        headers = ["id", "key", "value", "ttl", "created_at", "updated_at"]
+        headers = ["id", "key", "value", "ttl", "origin", "created_at", "updated_at"]
         worksheet.append(headers)
         for c in items:
             worksheet.append([
@@ -58,6 +70,7 @@ class CacheService:
                 c.key,
                 (c.value[:5000] + "..." if c.value and len(c.value) > 5000 else c.value),
                 c.ttl,
+                _origin_from_key(c.key),
                 str(c.created_at) if c.created_at else None,
                 str(c.updated_at) if c.updated_at else None,
             ])

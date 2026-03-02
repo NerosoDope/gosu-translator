@@ -803,6 +803,38 @@ export const gameAPI = {
   delete: (id: number) => apiClient.delete(`/game/${id}`),
 };
 
+// Quality Check API
+export interface QualityIssueResult {
+  category: string;
+  severity: string;
+  message: string;
+  suggestion: string;
+  deduction: number;
+}
+export interface QualityCheckResult {
+  score: number;
+  verdict: string;
+  issues: QualityIssueResult[];
+  suggestions: string[];
+  should_retranslate: boolean;
+}
+export const qualityCheckAPI = {
+  check: (data: {
+    source: string;
+    translated: string;
+    source_lang?: string;
+    target_lang?: string;
+    glossary_terms?: string[][];
+  }) => apiClient.post<QualityCheckResult>('/quality-check', data),
+  checkBatch: (data: {
+    items: { source: string; translated: string; source_lang?: string; target_lang?: string }[];
+  }) =>
+    apiClient.post<{ results: QualityCheckResult[]; avg_score: number; retranslate_count: number }>(
+      '/quality-check/batch',
+      data
+    ),
+};
+
 // Game_glossary API
 export const game_glossaryAPI = {
   getList: (params?: any) => apiClient.get(`/game_glossary`, { params }),
