@@ -60,6 +60,11 @@ class CacheRepository:
         result = await self.db.execute(select(Cache).where(Cache.id == id))
         return result.scalar_one_or_none()
 
+    async def get_by_key_any(self, key: str) -> Optional[Cache]:
+        """Trả về cache entry theo key (kể cả đã hết hạn). Dùng để kiểm tra nguồn trước khi ghi đè."""
+        result = await self.db.execute(select(Cache).where(Cache.key == key))
+        return result.scalar_one_or_none()
+
     async def get_by_key(self, key: str) -> Optional[Cache]:
         """Trả về cache entry chưa hết hạn.
         - ttl IS NOT NULL: so sánh created_at + ttl giây với now()
@@ -95,7 +100,7 @@ class CacheRepository:
             existing = result.scalar_one_or_none()
 
             if existing:
-                # Cập nhật value, ttl, origin (nếu có), reset created_at để gia hạn TTL
+                # Cập nhật value, ttl, origin, source_text (nếu có), reset created_at để gia hạn TTL
                 values = {
                     "value": data.get("value"),
                     "ttl": data.get("ttl"),
@@ -104,6 +109,8 @@ class CacheRepository:
                 }
                 if "origin" in data:
                     values["origin"] = data.get("origin")
+                if "source_text" in data:
+                    values["source_text"] = data.get("source_text")
                 await self.db.execute(
                     update(Cache).where(Cache.key == key).values(**values)
                 )
@@ -116,6 +123,7 @@ class CacheRepository:
                     value=data.get("value"),
                     ttl=data.get("ttl"),
                     origin=data.get("origin"),
+                    source_text=data.get("source_text"),
                 )
                 self.db.add(cache)
                 await self.db.commit()

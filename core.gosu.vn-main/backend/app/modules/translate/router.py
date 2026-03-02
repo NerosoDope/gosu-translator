@@ -2163,7 +2163,9 @@ async def proofread_row_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính AI thất bại: {getattr(e, 'message', str(e))}")
-    if result:
+    # Chỉ ghi cache khi hiệu đính ra nội dung khác với bản cũ; không đổi thì không ghi đè nguồn
+    current_translated = (body.translated or "").strip()
+    if result and (result.strip() != current_translated):
         try:
             await save_translation_to_cache(
                 db, body.original.strip(), result,
@@ -2209,10 +2211,15 @@ async def proofread_batch_endpoint(
     items_by_index = {item["index"]: item for item in items_dicts}
     for r in results:
         orig_item = items_by_index.get(r["index"])
-        if orig_item and r.get("proofread"):
+        if not orig_item or not r.get("proofread"):
+            continue
+        # Chỉ ghi cache khi hiệu đính ra nội dung khác với bản cũ; không đổi thì không ghi đè nguồn
+        old_translated = (orig_item.get("translated") or "").strip()
+        new_proofread = (r["proofread"] or "").strip()
+        if new_proofread != old_translated:
             try:
                 await save_translation_to_cache(
-                    db, (orig_item.get("original") or "").strip(), r["proofread"],
+                    db, (orig_item.get("original") or "").strip(), new_proofread,
                     body.source_lang.strip(), body.target_lang.strip(),
                     origin="proofread",
                 )

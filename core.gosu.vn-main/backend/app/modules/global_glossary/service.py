@@ -25,9 +25,38 @@ class Global_GlossaryService:
         self.repo = Global_GlossaryRepository(db)
         self.import_batch_svc = ImportBatchService(db)
     
-    async def list(self, skip: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
-        """List global_glossary"""
-        return await self.repo.list(skip=skip, limit=limit)
+    async def list(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        search: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        language_pair: Optional[str] = None,
+        game_category_id: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List global_glossary với tìm kiếm, lọc, sắp xếp, phân trang. Trả về { items, total, page, per_page, pages }."""
+        items, total = await self.repo.list(
+            skip=skip,
+            limit=limit,
+            search=search,
+            is_active=is_active,
+            language_pair=language_pair,
+            game_category_id=game_category_id,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        page = (skip // limit) + 1 if limit else 1
+        per_page = limit
+        pages = (total + limit - 1) // limit if limit else 0
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": pages,
+        }
     
     async def find_translation(self, term: str, language_pair: str, game_category_id: Optional[int] = None) -> Optional[str]:
         """Tìm bản dịch theo term và language_pair (exact match). Lọc theo game_category_id nếu có."""
@@ -243,7 +272,7 @@ class Global_GlossaryService:
             raise
 
         # Lấy dữ liệu
-        items = await self.repo.list(skip=0, limit=100000)
+        items, _ = await self.repo.list(skip=0, limit=100000)
 
         # Tạo workbook
         workbook = openpyxl.Workbook()

@@ -9,6 +9,7 @@ def _cache_to_dict(c: Cache) -> Dict[str, Any]:
         "id": c.id,
         "key": c.key,
         "value": c.value,
+        "source_text": getattr(c, "source_text", None),
         "ttl": c.ttl,
         "origin": getattr(c, "origin", None),
         "created_at": c.created_at,
@@ -74,6 +75,10 @@ class CacheService:
 
     async def get_by_key(self, key: str):
         return await self.repo.get_by_key(key)
+
+    async def get_by_key_any(self, key: str):
+        """Lấy bản ghi cache theo key (kể cả đã hết hạn)."""
+        return await self.repo.get_by_key_any(key)
 
     async def create(self, data: Dict[str, Any]):
         return await self.repo.create(data)

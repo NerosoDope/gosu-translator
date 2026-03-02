@@ -422,6 +422,7 @@ export default function ProofreadFilePage() {
             File cần có ít nhất 2 cột: cột văn bản gốc và cột bản dịch. Hệ thống tự động phát hiện cặp cột theo chuẩn{' '}
             <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs font-mono">tên_cột</code> +{' '}
             <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs font-mono">tên_cột_translated</code>.
+            Nếu không có sẽ phải chọn thủ công.
           </p>
 
           <div

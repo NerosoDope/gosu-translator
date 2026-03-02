@@ -96,15 +96,15 @@ function GlobalGlossaryContent() {
 
   const deleteMutation = useDeleteGlobal_glossary();
 
-  // Sync data
+  // Sync data (API trả về { items, total, page, per_page, pages })
   useEffect(() => {
     if (response) {
-      console.log("Global glossary API response:", response);
-      setItems(response || []);
+      const list = Array.isArray(response) ? response : (response.items ?? []);
+      setItems(list);
       setPagination(prev => ({
         ...prev,
-        total: response.total || 0,
-        pages: response.pages || 0,
+        total: response.total ?? 0,
+        pages: response.pages ?? (Math.ceil((response.total ?? 0) / prev.per_page) || 0),
       }));
     }
     if (queryError) {

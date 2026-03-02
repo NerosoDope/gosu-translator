@@ -9,6 +9,7 @@ class CacheBase(BaseModel):
     value: str
     ttl: Optional[int] = CACHE_DEFAULT_TTL
     origin: Optional[str] = None  # direct | file | proofread
+    source_text: Optional[str] = None  # nội dung gốc (xem chi tiết)
 
 class CacheCreate(CacheBase):
     pass
@@ -17,6 +18,7 @@ class CacheUpdate(BaseModel):
     value: Optional[str] = None
     ttl: Optional[int] = None
     origin: Optional[str] = None
+    source_text: Optional[str] = None
 
 class CacheResponse(CacheBase):
     id: int

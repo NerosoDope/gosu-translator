@@ -93,9 +93,16 @@ def _glossary_prompt_section(terms: List[Tuple[str, str]]) -> str:
 
 
 # Nguồn tạo cache (lưu trong cột origin): direct | file | proofread
+# Thứ tự ưu tiên khi ghi đè: proofread > direct > file (số cao hơn = ưu tiên cao hơn)
 CACHE_ORIGIN_DIRECT = "direct"
 CACHE_ORIGIN_FILE = "file"
 CACHE_ORIGIN_PROOFREAD = "proofread"
+CACHE_ORIGIN_PRIORITY = {CACHE_ORIGIN_PROOFREAD: 3, CACHE_ORIGIN_DIRECT: 2, CACHE_ORIGIN_FILE: 1}
+
+
+def _origin_priority(origin: Optional[str]) -> int:
+    """Ưu tiên nguồn: proofread (3) > direct (2) > file (1). Nguồn khác = 0."""
+    return CACHE_ORIGIN_PRIORITY.get((origin or "").strip(), 0)
 
 
 def _cache_key(source_lang: str, target_lang: str, text: str) -> str:
@@ -440,13 +447,22 @@ async def save_translation_to_cache(
     """
     Upsert 1 cặp bản dịch vào cache. Key rút gọn translate:vi:en:hash, nguồn lưu trong cột origin.
     origin: direct | file | proofread (mặc định direct).
+    Chỉ ghi đè khi nguồn mới có ưu tiên >= nguồn hiện tại: proofread > direct > file.
     """
     if not translated:
         return
     origin = (origin or CACHE_ORIGIN_DIRECT).strip() or CACHE_ORIGIN_DIRECT
     key = _cache_key(source_lang, target_lang, text)
     cache_svc = CacheService(db)
-    payload = {"key": key, "value": translated, "ttl": TRANSLATE_CACHE_TTL, "origin": origin}
+    try:
+        existing = await cache_svc.get_by_key_any(key)
+        if existing:
+            current_origin = getattr(existing, "origin", None)
+            if _origin_priority(current_origin) > _origin_priority(origin):
+                return  # Không ghi đè nguồn có ưu tiên cao hơn
+    except Exception as e:
+        logger.warning("save_translation_to_cache get_by_key_any: %s", e)
+    payload = {"key": key, "value": translated, "ttl": TRANSLATE_CACHE_TTL, "origin": origin, "source_text": text}
     try:
         await cache_svc.create(payload)
     except Exception as e:
