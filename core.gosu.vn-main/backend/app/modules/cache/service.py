@@ -4,23 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .repository import CacheRepository
 from .models import Cache
 
-def _origin_from_key(key: str) -> Optional[str]:
-    """Lấy nguồn từ key: translate:file:vi:en:hash -> file."""
-    if not key or not key.startswith("translate:"):
-        return None
-    parts = key.split(":", 4)
-    if len(parts) >= 5 and parts[1] in ("direct", "file", "proofread"):
-        return parts[1]
-    return None
-
-
 def _cache_to_dict(c: Cache) -> Dict[str, Any]:
     return {
         "id": c.id,
         "key": c.key,
         "value": c.value,
         "ttl": c.ttl,
-        "origin": _origin_from_key(c.key),
+        "origin": getattr(c, "origin", None),
         "created_at": c.created_at,
         "updated_at": c.updated_at,
     }
@@ -70,7 +60,7 @@ class CacheService:
                 c.key,
                 (c.value[:5000] + "..." if c.value and len(c.value) > 5000 else c.value),
                 c.ttl,
-                _origin_from_key(c.key),
+                getattr(c, "origin", None),
                 str(c.created_at) if c.created_at else None,
                 str(c.updated_at) if c.updated_at else None,
             ])

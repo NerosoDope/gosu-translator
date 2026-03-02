@@ -92,24 +92,16 @@ def _glossary_prompt_section(terms: List[Tuple[str, str]]) -> str:
     )
 
 
-# Nguồn tạo cache (mã hóa trong key): direct | file | proofread
+# Nguồn tạo cache (lưu trong cột origin): direct | file | proofread
 CACHE_ORIGIN_DIRECT = "direct"
 CACHE_ORIGIN_FILE = "file"
 CACHE_ORIGIN_PROOFREAD = "proofread"
 
 
-def _cache_key(source_lang: str, target_lang: str, text: str, origin: str = CACHE_ORIGIN_DIRECT) -> str:
-    """Tạo cache key: translate:{origin}:{source_lang}:{target_lang}:{digest}.
-    Ví dụ: translate:file:vi:en:a92c6a62b6916675
+def _cache_key(source_lang: str, target_lang: str, text: str) -> str:
+    """Tạo cache key rút gọn: translate:{source_lang}:{target_lang}:{digest}.
+    Ví dụ: translate:vi:en:a92c6a62b6916675
     """
-    normalized = " ".join((text.strip() or "").split())
-    raw = f"{source_lang}|{target_lang}|{normalized}".encode("utf-8")
-    digest = hashlib.sha256(raw).hexdigest()[:16]
-    return f"translate:{origin}:{source_lang}:{target_lang}:{digest}"
-
-
-def _cache_key_legacy(source_lang: str, target_lang: str, text: str) -> str:
-    """Key cũ không có origin (tương thích ngược)."""
     normalized = " ".join((text.strip() or "").split())
     raw = f"{source_lang}|{target_lang}|{normalized}".encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()[:16]
@@ -415,16 +407,10 @@ async def translate_check_only(
 
     language_pair = f"{source_lang.strip()}-{target_lang.strip()}"
     cache_svc = CacheService(db)
-    # Ưu tiên: proofread (đã hiệu đính) > direct (dịch trực tiếp) > file (dịch file) > key cũ
-    for key in (
-        _cache_key(source_lang, target_lang, text, CACHE_ORIGIN_PROOFREAD),
-        _cache_key(source_lang, target_lang, text, CACHE_ORIGIN_DIRECT),
-        _cache_key(source_lang, target_lang, text, CACHE_ORIGIN_FILE),
-        _cache_key_legacy(source_lang, target_lang, text),
-    ):
-        cached = await cache_svc.get_by_key(key)
-        if cached and getattr(cached, "value", None):
-            return (cached.value or "").strip()
+    key = _cache_key(source_lang, target_lang, text)
+    cached = await cache_svc.get_by_key(key)
+    if cached and getattr(cached, "value", None):
+        return (cached.value or "").strip()
 
     game_glossary_svc = Game_GlossaryService(db)
     game_trans = await game_glossary_svc.find_translation(
@@ -452,15 +438,15 @@ async def save_translation_to_cache(
     origin: Optional[str] = None,
 ) -> None:
     """
-    Upsert 1 cặp bản dịch vào cache. Nguồn được mã hóa trong key: translate:{origin}:...
+    Upsert 1 cặp bản dịch vào cache. Key rút gọn translate:vi:en:hash, nguồn lưu trong cột origin.
     origin: direct | file | proofread (mặc định direct).
     """
     if not translated:
         return
     origin = (origin or CACHE_ORIGIN_DIRECT).strip() or CACHE_ORIGIN_DIRECT
-    key = _cache_key(source_lang, target_lang, text, origin)
+    key = _cache_key(source_lang, target_lang, text)
     cache_svc = CacheService(db)
-    payload = {"key": key, "value": translated, "ttl": TRANSLATE_CACHE_TTL}
+    payload = {"key": key, "value": translated, "ttl": TRANSLATE_CACHE_TTL, "origin": origin}
     try:
         await cache_svc.create(payload)
     except Exception as e:

@@ -25,14 +25,14 @@ class CacheRepository:
             term = f"%{query_str.strip()}%"
             q = q.where(Cache.key.ilike(term))
         if origin and origin.strip():
-            q = q.where(Cache.key.like(f"translate:{origin.strip():s}:%"))
+            q = q.where(Cache.origin == origin.strip())
         order_col = getattr(Cache, sort_by, Cache.id)
         q = q.order_by(order_col.desc() if sort_order == "desc" else order_col.asc())
         count_q = select(func.count()).select_from(Cache)
         if query_str and query_str.strip():
             count_q = count_q.where(Cache.key.ilike(term))
         if origin and origin.strip():
-            count_q = count_q.where(Cache.key.like(f"translate:{origin.strip():s}:%"))
+            count_q = count_q.where(Cache.origin == origin.strip())
         total = (await self.db.execute(count_q)).scalar() or 0
         result = await self.db.execute(q.offset(skip).limit(limit))
         return result.scalars().all(), total
@@ -50,7 +50,7 @@ class CacheRepository:
         if query_str and query_str.strip():
             q = q.where(Cache.key.ilike(f"%{query_str.strip()}%"))
         if origin and origin.strip():
-            q = q.where(Cache.key.like(f"translate:{origin.strip():s}:%"))
+            q = q.where(Cache.origin == origin.strip())
         order_col = getattr(Cache, sort_by, Cache.id)
         q = q.order_by(order_col.desc() if sort_order == "desc" else order_col.asc())
         result = await self.db.execute(q.limit(limit))
@@ -95,16 +95,17 @@ class CacheRepository:
             existing = result.scalar_one_or_none()
 
             if existing:
-                # Cập nhật và reset created_at để gia hạn TTL
+                # Cập nhật value, ttl, origin (nếu có), reset created_at để gia hạn TTL
+                values = {
+                    "value": data.get("value"),
+                    "ttl": data.get("ttl"),
+                    "created_at": func.now(),
+                    "updated_at": func.now(),
+                }
+                if "origin" in data:
+                    values["origin"] = data.get("origin")
                 await self.db.execute(
-                    update(Cache)
-                    .where(Cache.key == key)
-                    .values(
-                        value=data.get("value"),
-                        ttl=data.get("ttl"),
-                        created_at=func.now(),
-                        updated_at=func.now(),
-                    )
+                    update(Cache).where(Cache.key == key).values(**values)
                 )
                 await self.db.commit()
                 logger.debug("Cache updated key=%s", (key or "")[:40])
@@ -114,6 +115,7 @@ class CacheRepository:
                     key=data.get("key"),
                     value=data.get("value"),
                     ttl=data.get("ttl"),
+                    origin=data.get("origin"),
                 )
                 self.db.add(cache)
                 await self.db.commit()
