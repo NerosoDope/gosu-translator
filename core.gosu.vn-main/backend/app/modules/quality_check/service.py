@@ -190,12 +190,15 @@ def check_quality(
         ))
         return _build_result(0, issues)
 
+    # Trả về text gốc → luôn chấm "Cần dịch lại" (không chấp nhận), áp dụng cho mọi loại file (docx, xlsx, csv, json, xml)
     if src and tgt.lower() == src.lower():
-        add_issue(
-            "error_signs", "critical",
-            "Bản dịch giống hệt văn bản gốc — có thể chưa được dịch.",
-            "Kiểm tra lại hoặc dịch thủ công đoạn này.",
-        )
+        issues.append(QualityIssue(
+            category="error_signs", severity="critical",
+            message="Bản dịch trả về đúng text gốc — chưa được dịch.",
+            suggestion="Dịch lại dòng/đoạn này.",
+            deduction=100,
+        ))
+        return _build_result(0, issues)
 
     # ─── Tiêu chí 2: Tỷ lệ độ dài ────────────────────────────────────────────
     if src:

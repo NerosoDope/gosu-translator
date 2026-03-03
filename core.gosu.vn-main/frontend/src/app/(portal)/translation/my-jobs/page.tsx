@@ -66,6 +66,20 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
 };
 
+function getJobSourceLabel(job: Job): string {
+  const st = job.payload?.source_type;
+  if (st === 'file') return 'Dịch file';
+  if (st === 'direct') return 'Dịch trực tiếp';
+  if (st === 'proofread') return 'Hiệu đính';
+  const code = (job.job_code || '').toUpperCase();
+  if (code.startsWith('DIRECT-')) return 'Dịch trực tiếp';
+  if (code.startsWith('TRANSLATION-FILE-')) return 'Dịch file';
+  if (code.startsWith('PROOFREAD-')) return 'Hiệu đính';
+  if (job.payload?.filename != null) return 'Dịch file';
+  if (job.payload?.text != null) return 'Dịch trực tiếp';
+  return '—';
+}
+
 function MyJobsPage() {
   const toast = useToastContext();
   const [userId, setUserId] = useState<number | null>(null);
@@ -490,6 +504,7 @@ function MyJobsPage() {
                 <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Thông tin cơ bản</h4>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Loại job</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.job_type}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Nguồn</span><span className="font-medium text-gray-900 dark:text-gray-100">{getJobSourceLabel(viewingJob)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thử lại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.retry_count ?? 0} / {viewingJob.max_retry ?? 3}</span></div>
                   {viewingJob.game_id && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Game ID</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_id}</span></div>}
                   {viewingJob.game_genre && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thể loại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_genre}</span></div>}

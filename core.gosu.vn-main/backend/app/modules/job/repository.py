@@ -20,7 +20,7 @@ def _apply_transition_side_effects(item, new_status: str) -> None:
     if new_status == JobStatus.IN_PROGRESS:
         if item.started_at is None:
             item.started_at = now
-    elif new_status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+    elif new_status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.REVIEW):
         item.finished_at = now
         if new_status == JobStatus.COMPLETED and (item.progress or 0) < 100:
             item.progress = 100
@@ -205,7 +205,7 @@ class JobRepository:
         return item.to_dict()
 
     async def retry(self, id: int) -> Optional[Dict[str, Any]]:
-        """Thử lại job — state machine: failed/cancelled → pending."""
+        """Thử lại job — state machine: failed/cancelled/review → pending."""
         item = await self._get_raw(id)
         if not item:
             return None

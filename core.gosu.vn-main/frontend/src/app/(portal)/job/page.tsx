@@ -85,8 +85,33 @@ function canDo(action: string, status: string, isDeleted: boolean): boolean {
     completed:   ['delete'],
     failed:      ['retry', 'delete'],
     cancelled:   ['retry', 'delete'],
+    review:      ['retry', 'delete'],
   };
   return (allowed[status] ?? []).includes(action);
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: 'Chờ xử lý',
+  in_progress: 'Đang xử lý',
+  completed: 'Hoàn thành',
+  failed: 'Thất bại',
+  cancelled: 'Đã hủy',
+  review: 'Cần xem lại',
+};
+
+/** Nguồn tạo job: từ payload.source_type hoặc suy từ job_code/payload (job cũ). */
+function getJobSourceLabel(job: Job): string {
+  const st = job.payload?.source_type;
+  if (st === 'file') return 'Dịch file';
+  if (st === 'direct') return 'Dịch trực tiếp';
+  if (st === 'proofread') return 'Hiệu đính';
+  const code = (job.job_code || '').toUpperCase();
+  if (code.startsWith('DIRECT-')) return 'Dịch trực tiếp';
+  if (code.startsWith('TRANSLATION-FILE-')) return 'Dịch file';
+  if (code.startsWith('PROOFREAD-')) return 'Hiệu đính';
+  if (job.payload?.filename != null) return 'Dịch file';
+  if (job.payload?.text != null) return 'Dịch trực tiếp';
+  return '—';
 }
 
 function JobPageContent() {
@@ -382,11 +407,12 @@ function JobPageContent() {
           completed: 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400',
           failed: 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400',
           cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
+          review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/20 dark:text-amber-400',
         };
         return (
             <div className="flex flex-col gap-1 w-fit">
             <span className={`inline-flex items-center px-2 py-1 text-xs rounded-full ${statusColors[job.status] || statusColors.pending}`}>
-              {job.status}
+              {STATUS_LABELS[job.status] ?? job.status}
             </span>
             {job.is_deleted && (
               <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
@@ -547,11 +573,12 @@ function JobPageContent() {
               className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               <option value="">Tất cả trạng thái</option>
-              <option value="pending">Pending</option>
-              <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-              <option value="cancelled">Cancelled</option>
+              <option value="pending">Chờ xử lý</option>
+              <option value="in_progress">Đang xử lý</option>
+              <option value="completed">Hoàn thành</option>
+              <option value="failed">Thất bại</option>
+              <option value="cancelled">Đã hủy</option>
+              <option value="review">Cần xem lại</option>
             </select>
 
             <select
@@ -765,10 +792,11 @@ function JobPageContent() {
                       completed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
                       failed: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
                       cancelled: 'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300',
+                      review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
                     };
                     return (
                       <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[viewingJob.status] || statusColors.pending}`}>
-                        {viewingJob.status}
+                        {STATUS_LABELS[viewingJob.status] ?? viewingJob.status}
                       </span>
                     );
                   })()}
@@ -812,6 +840,7 @@ function JobPageContent() {
                 <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Thông tin cơ bản</h4>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Loại job</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.job_type}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Nguồn</span><span className="font-medium text-gray-900 dark:text-gray-100">{getJobSourceLabel(viewingJob)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thử lại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.retry_count ?? 0} / {viewingJob.max_retry ?? 3}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Người tạo</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.creator_name ?? '-'}</span></div>
                   {viewingJob.game_id && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Game ID</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_id}</span></div>}

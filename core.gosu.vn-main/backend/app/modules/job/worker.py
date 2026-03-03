@@ -4,7 +4,7 @@ Job Priority Worker - Background worker xử lý jobs theo thứ tự ưu tiên.
 Cách hoạt động:
   - Mỗi POLL_INTERVAL giây, lấy 1 job pending có priority cao nhất
     (ORDER BY priority DESC, created_at ASC).
-  - Chạy bản dịch và cập nhật trạng thái: pending → in_progress → completed/failed.
+  - Chạy bản dịch và cập nhật trạng thái: pending → in_progress → completed | failed (lỗi = không dịch ra được gì).
   - Chỉ xử lý job_type='translation' có payload.text.
   - Nếu job bị cancel trong lúc dịch, bỏ qua bước cập nhật completed.
 
@@ -33,7 +33,7 @@ async def _process_job(job_id: int) -> None:
       1. Kiểm tra job vẫn pending (tránh race condition).
       2. Cập nhật → in_progress.
       3. Gọi translate_with_priority (cache → glossary → AI).
-      4. Cập nhật → completed hoặc failed.
+      4. Cập nhật → completed hoặc failed (khi lỗi: không dịch ra được bất cứ thứ gì).
     """
     async with AsyncSessionLocal() as db:
         # Bước 1: Fetch job, kiểm tra vẫn pending
@@ -56,7 +56,7 @@ async def _process_job(job_id: int) -> None:
             f"(priority={item.priority}, type={item.job_type})"
         )
 
-        # Bước 3: Dịch thuật
+        # Bước 3: Dịch thuật (cache > game glossary > global glossary > AI)
         try:
             translated = await translate_with_priority(
                 db=db,
@@ -66,6 +66,8 @@ async def _process_job(job_id: int) -> None:
                 prompt_id=payload.get("prompt_id"),
                 context=payload.get("context"),
                 style=payload.get("style"),
+                game_id=payload.get("game_id"),
+                game_category_id=payload.get("game_category_id"),
             )
 
             # Bước 4a: in_progress → completed (re-fetch để kiểm tra cancel)
@@ -82,7 +84,7 @@ async def _process_job(job_id: int) -> None:
         except Exception as e:
             logger.error(f"[Worker] Job {job_id} failed: {e}", exc_info=True)
 
-            # Bước 4b: in_progress → failed
+            # Bước 4b: in_progress → failed (không dịch ra được gì — chức năng dịch bị lỗi)
             try:
                 result3 = await db.execute(select(Job).where(Job.id == job_id))
                 item3 = result3.scalar_one_or_none()
@@ -91,6 +93,7 @@ async def _process_job(job_id: int) -> None:
                     item3.finished_at = datetime.now(timezone.utc)
                     item3.error_message = str(e)[:2000]
                     await db.commit()
+                    logger.info(f"[Worker] Job {job_id} chuyển sang trạng thái failed")
             except Exception as inner_e:
                 logger.error(
                     f"[Worker] Could not update job {job_id} to failed: {inner_e}"
@@ -127,7 +130,7 @@ async def job_worker_loop() -> None:
                 if payload.get("text", "").strip():
                     await _process_job(job.id)
                 else:
-                    # payload rỗng, đánh dấu failed
+                    # payload rỗng — không dịch ra được gì → failed
                     async with AsyncSessionLocal() as db:
                         result = await db.execute(
                             select(Job).where(Job.id == job.id)

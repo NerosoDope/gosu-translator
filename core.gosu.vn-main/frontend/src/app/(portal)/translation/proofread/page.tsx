@@ -304,6 +304,7 @@ export default function ProofreadFilePage() {
     try {
       const jobCode = `PROOFREAD-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const payload = {
+        source_type: 'proofread',
         rows: rows.map((r) => ({ id: r.id, original: r.original, translated: r.translated, status: r.status })),
         source_lang: sourceLang || undefined,
         target_lang: targetLang || undefined,

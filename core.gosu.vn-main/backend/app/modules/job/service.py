@@ -74,6 +74,7 @@ class JobService:
             "completed":   "D4EDDA",
             "failed":      "F8D7DA",
             "cancelled":   "E2E3E5",
+            "review":      "FFE4B5",  # Cần xem lại — màu cam nhạt
         }
         HEADER_FILL  = PatternFill("solid", fgColor="1F3864")
         HEADER_FONT  = Font(bold=True, color="FFFFFF", size=11)
