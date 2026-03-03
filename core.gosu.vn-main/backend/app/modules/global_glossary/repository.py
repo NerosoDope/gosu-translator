@@ -5,9 +5,9 @@ Author: GOSU Development Team
 Version: 1.0.0
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from app.modules.global_glossary.models import Global_Glossary
 from app.modules.import_batches.models import ImportBatch
 
@@ -24,19 +24,60 @@ class Global_GlossaryRepository:
         d = gg.to_dict()
         d["imported_at"] = imported_at
         return d
+
+    def _apply_filters(self, q, count_q, search: Optional[str], is_active: Optional[bool], language_pair: Optional[str], game_category_id: Optional[int]):
+        """Áp dụng bộ lọc tìm kiếm và lọc cho query và count query."""
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            cond = Global_Glossary.term.ilike(term) | Global_Glossary.translated_term.ilike(term)
+            q = q.where(cond)
+            count_q = count_q.where(cond)
+        if is_active is not None:
+            q = q.where(Global_Glossary.is_active == is_active)
+            count_q = count_q.where(Global_Glossary.is_active == is_active)
+        if language_pair and language_pair.strip():
+            q = q.where(Global_Glossary.language_pair == language_pair.strip())
+            count_q = count_q.where(Global_Glossary.language_pair == language_pair.strip())
+        if game_category_id is not None:
+            q = q.where(Global_Glossary.game_category_id == game_category_id)
+            count_q = count_q.where(Global_Glossary.game_category_id == game_category_id)
+        return q, count_q
     
-    async def list(self, skip: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
-        """List global_glossary, join import_batches để lấy imported_at."""
+    async def list(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        search: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        language_pair: Optional[str] = None,
+        game_category_id: Optional[int] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """List global_glossary với tìm kiếm, lọc, sắp xếp. Join import_batches để lấy imported_at. Trả về (items, total)."""
         query = (
             select(Global_Glossary, ImportBatch.created_at.label("imported_at"))
             .select_from(Global_Glossary)
             .outerjoin(ImportBatch, Global_Glossary.import_id == ImportBatch.id)
-            .offset(skip)
-            .limit(limit)
         )
+        count_q = select(func.count()).select_from(Global_Glossary)
+        query, count_q = self._apply_filters(query, count_q, search, is_active, language_pair, game_category_id)
+
+        if sort_by:
+            sort_column = getattr(Global_Glossary, sort_by, None)
+            if sort_column is not None:
+                if sort_order == "desc":
+                    query = query.order_by(sort_column.desc())
+                else:
+                    query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(Global_Glossary.id.desc())
+
+        total = (await self.db.execute(count_q)).scalar() or 0
+        query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
         rows = result.all()
-        return [self._row_to_dict(row) for row in rows]
+        return [self._row_to_dict(row) for row in rows], total
     
     async def find_translation(
         self, term: str, language_pair: str, game_category_id: Optional[int] = None

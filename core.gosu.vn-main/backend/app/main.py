@@ -51,6 +51,7 @@ from app.modules.translate import router as translate_router
 from app.modules.global_glossary import router as global_glossary_router
 from app.modules.game import router as game_router
 from app.modules.import_batches import router as import_batches_router
+from app.modules.quality_check import router as quality_check_router
 
 import logging
 
@@ -113,6 +114,7 @@ app.include_router(language_router, prefix="/api/v1/languages", tags=["languages
 app.include_router(job_router, prefix="/api/v1/job", tags=["job"])
 app.include_router(translate_router, prefix="/api/v1/translate", tags=["translate"])
 app.include_router(import_batches_router, prefix="/api/v1/import-batches", tags=["import-batches"])
+app.include_router(quality_check_router, prefix="/api/v1/quality-check", tags=["quality-check"])
 
 
 @app.get("/")
@@ -174,4 +176,3 @@ async def startup_event():
     from app.modules.job.worker import job_worker_loop
     asyncio.create_task(job_worker_loop())
     logger.info("[Worker] Job priority worker đã được khởi động.")
-

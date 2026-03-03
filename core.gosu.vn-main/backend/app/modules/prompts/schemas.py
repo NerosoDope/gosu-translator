@@ -7,6 +7,7 @@ class PromptBase(BaseModel):
     content: str
     description: Optional[str] = None
     is_active: bool = True
+    is_default: bool = False
 
 class PromptCreate(PromptBase):
     pass
@@ -16,6 +17,7 @@ class PromptUpdate(BaseModel):
     content: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    is_default: Optional[bool] = None
 
 class PromptResponse(PromptBase):
     id: int

@@ -6,6 +6,9 @@ Version: 1.0.0
 """
 
 import io
+import re
+import unicodedata
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,27 +66,59 @@ async def upload_excel_game_glossary(
     return ExcelUploadResponse(**result)
 
 
+def _sanitize_filename(name: str) -> str:
+    """Loại bỏ ký tự không hợp lệ trong tên file."""
+    s = (name or "").strip()
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s)
+    return s[: 200] if s else "export"
+
+
+def _name_to_slug(name: str) -> str:
+    """Chuyển tên (tiếng Việt) sang slug ASCII không dấu, ví dụ: 'Lạc thần chiến ca' -> 'lacthanchienca'."""
+    if not (name or "").strip():
+        return "export"
+    s = name.strip().lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s[:80] if s else "export"
+
+
 @router.get("/export/excel")
 async def export_excel_game_glossary(
     game_id: Optional[int] = Query(None, description="Game ID (nếu muốn export riêng theo game)"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export Game Glossary ra file Excel (.xlsx)."""
+    """Export Game Glossary ra file Excel (.xlsx), có cột tên game; tên file chứa tên game khi export theo 1 game."""
     service = Game_GlossaryService(db)
     try:
-        excel_bytes = await service.export_excel(game_id=game_id)
+        excel_bytes, game_name = await service.export_excel(game_id=game_id)
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="openpyxl module is not installed on the server.",
         )
-    filename = "game_glossary_export.xlsx" if not game_id else f"game_glossary_game_{game_id}.xlsx"
+    if game_name:
+        slug = _name_to_slug(game_name)
+        filename_ascii = f"tu_dien_game_{slug}.xlsx"
+        filename_unicode = f"tu_dien_game_{_sanitize_filename(game_name)}.xlsx"
+    elif game_id:
+        filename_unicode = filename_ascii = f"game_glossary_game_{game_id}.xlsx"
+    else:
+        filename_unicode = filename_ascii = "game_glossary_export.xlsx"
+
+    # Header Content-Disposition: filename ASCII-only (latin-1), filename* UTF-8 (RFC 5987) để hỗ trợ tên tiếng Việt
+    try:
+        filename_ascii.encode("ascii")
+    except UnicodeEncodeError:
+        filename_ascii = f"tu_dien_game_{game_id or 'export'}.xlsx"
+    content_disp = f'attachment; filename="{filename_ascii}"'
+    if filename_unicode != filename_ascii:
+        content_disp += f"; filename*=UTF-8''{quote(filename_unicode, safe='')}"
     return StreamingResponse(
         io.BytesIO(excel_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        },
+        headers={"Content-Disposition": content_disp},
     )
 
 

@@ -17,15 +17,31 @@ from app.modules.global_glossary.service import Global_GlossaryService
 router = APIRouter()
 
 
-@router.get("", response_model=List[Global_GlossaryResponse])
+@router.get("")
 async def list_global_glossary(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db)
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=1, le=100),
+    search: Optional[str] = Query(None, description="Tìm theo thuật ngữ gốc hoặc bản dịch"),
+    is_active: Optional[bool] = Query(None),
+    language_pair: Optional[str] = Query(None),
+    game_category_id: Optional[int] = Query(None),
+    sort_by: Optional[str] = Query("id"),
+    sort_order: Optional[str] = Query("desc", description="asc | desc"),
+    db: AsyncSession = Depends(get_db),
 ):
-    """List Global_Glossary - Lấy danh sách"""
+    """List Global_Glossary - Lấy danh sách có tìm kiếm, lọc, sắp xếp. Trả về { items, total, page, per_page, pages }."""
+    skip = (page - 1) * per_page
     service = Global_GlossaryService(db)
-    return await service.list(skip=skip, limit=limit)
+    return await service.list(
+        skip=skip,
+        limit=per_page,
+        search=search,
+        is_active=is_active,
+        language_pair=language_pair,
+        game_category_id=game_category_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
 
 # Literal paths (all, upload-excel, export/excel) must be before /{id} to avoid "all" matched as id

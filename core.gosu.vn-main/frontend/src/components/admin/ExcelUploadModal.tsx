@@ -2,7 +2,8 @@
 
 import React, { useState, useRef } from 'react';
 import { useToastContext } from '@/context/ToastContext';
-import { filesAPI, importBatchesAPI } from '@/lib/api';
+import { filesAPI, importBatchesAPI, jobAPI } from '@/lib/api';
+import { authStore } from '@/lib/auth';
 
 interface ExcelUploadModalProps {
   isOpen: boolean;
@@ -11,6 +12,8 @@ interface ExcelUploadModalProps {
   uploadFunction: (file: File, gameId?: number) => Promise<any>;
   title?: string;
   gameId?: number;
+  /** Khi truyền vào, sau khi upload thành công sẽ tự tạo job_type='glossary_update' */
+  glossaryType?: 'game_glossary' | 'global_glossary';
 }
 
 export default function ExcelUploadModal({
@@ -20,6 +23,7 @@ export default function ExcelUploadModal({
   uploadFunction,
   title = 'Upload Excel File',
   gameId,
+  glossaryType,
 }: ExcelUploadModalProps) {
   const { success: showToast, error: showErrorToast } = useToastContext();
   const [file, setFile] = useState<File | null>(null);
@@ -71,6 +75,40 @@ export default function ExcelUploadModal({
           msg += ` Bỏ qua ${skipped_count} dòng đã tồn tại.`;
         }
         showToast(msg);
+
+        // Tạo job glossary_update nếu được yêu cầu
+        if (glossaryType) {
+          try {
+            const user = await authStore.getCurrentUser();
+            if (user?.id) {
+              const jobCode = `GLOSSARY-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+              await jobAPI.create({
+                job_code: jobCode,
+                job_type: 'glossary_update',
+                status: 'completed',
+                progress: 100,
+                user_id: user.id,
+                payload: {
+                  glossary_type: glossaryType,
+                  ...(gameId != null ? { game_id: gameId } : {}),
+                  filename: file.name,
+                  total_rows: result.data.total_rows ?? 0,
+                  created_count,
+                  skipped_count,
+                },
+                result: {
+                  created_count,
+                  skipped_count,
+                  error_count: result.data.error_count ?? 0,
+                  saved_at: new Date().toISOString(),
+                },
+              });
+            }
+          } catch {
+            // Không chặn flow chính nếu tạo job thất bại
+          }
+        }
+
         onSuccess();
       } else {
         showErrorToast(`Upload hoàn tất nhưng có ${result.data.error_count} lỗi.`);

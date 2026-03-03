@@ -9,6 +9,7 @@ interface Prompt {
   content: string;
   description: string;
   is_active: boolean;
+  is_default?: boolean;
 }
 
 interface PromptsFormProps {
@@ -23,6 +24,7 @@ export default function PromptsForm({ prompt, onSuccess, onCancel }: PromptsForm
   const [content, setContent] = useState(prompt?.content || '');
   const [description, setDescription] = useState(prompt?.description || '');
   const [isActive, setIsActive] = useState(prompt?.is_active ?? true);
+  const [isDefault, setIsDefault] = useState(prompt?.is_default ?? false);
   const [variables, setVariables] = useState<Record<string, string>>({});
 
   // Form validation
@@ -43,6 +45,7 @@ export default function PromptsForm({ prompt, onSuccess, onCancel }: PromptsForm
       setContent(prompt.content || '');
       setDescription(prompt.description || '');
       setIsActive(prompt.is_active ?? true);
+      setIsDefault(prompt.is_default ?? false);
     }
   }, [prompt]);
 
@@ -153,6 +156,7 @@ export default function PromptsForm({ prompt, onSuccess, onCancel }: PromptsForm
         content: content.trim(),
         description: description.trim(),
         is_active: isActive,
+        is_default: isDefault,
       };
 
       if (prompt?.id) {
@@ -354,6 +358,26 @@ export default function PromptsForm({ prompt, onSuccess, onCancel }: PromptsForm
               </span>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 Prompt này có thể được sử dụng trong hệ thống dịch thuật
+              </p>
+            </div>
+          </label>
+        </div>
+
+        {/* Default Prompt */}
+        <div className="space-y-2">
+          <label className="flex items-center space-x-3">
+            <input
+              type="checkbox"
+              checked={isDefault}
+              onChange={(e) => setIsDefault(e.target.checked)}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Chọn làm prompt mặc định
+              </span>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Prompt này sẽ được tự động chọn khi sử dụng chức năng có ô chọn prompt (dịch file, dịch văn bản, v.v.)
               </p>
             </div>
           </label>

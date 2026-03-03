@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import Button from '@/components/ui/Button';
-import { jobAPI, promptsAPI, languageAPI, proofreadAPI } from '@/lib/api';
+import { jobAPI, promptsAPI, languageAPI, proofreadAPI, qualityCheckAPI } from '@/lib/api';
+import type { QualityCheckResult } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
 import { useToastContext } from '@/context/ToastContext';
 import { authStore } from '@/lib/auth';
@@ -53,32 +54,12 @@ export default function TranslateDemoPage() {
   const [loadingGameCategories, setLoadingGameCategories] = useState(true);
   const [loading, setLoading] = useState(false);
   const [proofreadLoading, setProofreadLoading] = useState(false);
-  const [fakeProgress, setFakeProgress] = useState(0);
+  const [qualityResult, setQualityResult] = useState<QualityCheckResult | null>(null);
+  const [qualityLoading, setQualityLoading] = useState(false);
+  const [qualityExpanded, setQualityExpanded] = useState(false);
 
   const charCount = text.length;
 
-  // Fake progress animation khi đang dịch
-  useEffect(() => {
-    if (!loading) {
-      // Dịch xong: nhảy lên 100% rồi reset sau 600ms
-      if (fakeProgress > 0) {
-        setFakeProgress(100);
-        const t = setTimeout(() => setFakeProgress(0), 600);
-        return () => clearTimeout(t);
-      }
-      return;
-    }
-    setFakeProgress(0);
-    const id = setInterval(() => {
-      setFakeProgress((p) => {
-        if (p >= 88) return p;
-        // Tăng nhanh lúc đầu, chậm dần khi gần ngưỡng
-        const step = p < 40 ? 8 : p < 65 ? 4 : p < 80 ? 2 : 0.8;
-        return Math.min(p + step, 88);
-      });
-    }, 400);
-    return () => clearInterval(id);
-  }, [loading]);
 
   useEffect(() => {
     let mounted = true;
@@ -87,6 +68,8 @@ export default function TranslateDemoPage() {
       .then((res: any) => {
         if (mounted && res?.data && Array.isArray(res.data)) {
           setPrompts(res.data);
+          const defaultP = res.data.find((p: any) => p.is_default);
+          if (defaultP) setSelectedPromptId(defaultP.id);
         }
       })
       .catch(() => {
@@ -180,11 +163,6 @@ export default function TranslateDemoPage() {
       toast.error('Ngôn ngữ nguồn và đích phải khác nhau.');
       return;
     }
-    if (!selectedPromptId) {
-      toast.error('Vui lòng chọn một prompt dịch thuật.');
-      return;
-    }
-
     let userId = 1;
     try {
       const user = await authStore.getCurrentUser();
@@ -195,6 +173,8 @@ export default function TranslateDemoPage() {
 
     setLoading(true);
     setTranslatedText('');
+    setQualityResult(null);
+    setQualityExpanded(false);
 
     const jobCode = `DIRECT-${Date.now()}`;
     const payload = {
@@ -239,6 +219,18 @@ export default function TranslateDemoPage() {
           const translated = job.result?.translated ?? '';
           setTranslatedText(translated);
           toast.success('Dịch thành công!');
+          // Tự động chấm điểm chất lượng
+          if (translated && content) {
+            setQualityLoading(true);
+            qualityCheckAPI.check({
+              source: content,
+              translated,
+              source_lang: sourceLang,
+              target_lang: targetLang,
+            }).then((res) => {
+              setQualityResult(res.data);
+            }).catch(() => {}).finally(() => setQualityLoading(false));
+          }
           return;
         }
         if (job.status === 'failed') {
@@ -359,7 +351,7 @@ export default function TranslateDemoPage() {
           </div>
           <div className="mt-4">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Prompt Dịch thuật <span className="text-red-500">*</span>
+              Prompt Dịch thuật
             </label>
             <select
               value={selectedPromptId}
@@ -367,52 +359,13 @@ export default function TranslateDemoPage() {
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
               disabled={loadingPrompts}
             >
-              <option value="">-- Chọn prompt --</option>
+              <option value="">Prompt mặc định</option>
               {prompts.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            {prompts.length === 0 && !loadingPrompts && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                Chưa có prompt nào. Vào Quản lý Prompts để tạo prompt dịch thuật.
-              </p>
-            )}
           </div>
         </div>
-
-        {/* Thanh tiến độ giả lập khi đang dịch */}
-        {loading && (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
-              <span className="flex items-center gap-1.5">
-                <svg className="w-3.5 h-3.5 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 100 16v-4l-3 3 3 3v-4a8 8 0 01-8-8z"/>
-                </svg>
-                Đang xử lý bản dịch...
-              </span>
-              <span className="font-medium text-blue-600 dark:text-blue-400">{Math.round(fakeProgress)}%</span>
-            </div>
-            <div className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-              <div
-                className="h-2 rounded-full transition-all duration-500 ease-out"
-                style={{
-                  width: `${fakeProgress}%`,
-                  background: 'linear-gradient(90deg, #3b82f6, #8b5cf6, #3b82f6)',
-                  backgroundSize: '200% 100%',
-                  animation: 'shimmer 2s infinite linear',
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        <style>{`
-          @keyframes shimmer {
-            0%   { background-position: 200% center; }
-            100% { background-position: -200% center; }
-          }
-        `}</style>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
           <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm flex flex-col">
@@ -483,7 +436,75 @@ export default function TranslateDemoPage() {
                 </svg>
               </div>
             </div>
-            <div className="mt-3 flex justify-end">
+            {/* Footer: điểm bên trái, nút bên phải */}
+            <div className="mt-3 flex items-start justify-between gap-3 min-h-[32px]">
+
+              {/* ── Điểm chất lượng (trái) ── */}
+              <div className="flex-1 min-w-0">
+                {qualityLoading && (
+                  <div className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 pt-1">
+                    <svg className="animate-spin w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                    </svg>
+                    Đang chấm điểm…
+                  </div>
+                )}
+                {qualityResult && !qualityLoading && (
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setQualityExpanded((v) => !v)}
+                      className="flex items-center gap-2 group"
+                    >
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${
+                        qualityResult.score >= 85
+                          ? 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800'
+                          : qualityResult.score >= 70
+                          ? 'bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:border-yellow-800'
+                          : qualityResult.score >= 60
+                          ? 'bg-orange-100 text-orange-600 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800'
+                          : 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800'
+                      }`}>
+                        {qualityResult.score}/100
+                        <svg className={`w-3 h-3 transition-transform ${qualityExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
+                        </svg>
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-200 transition-colors">
+                        {qualityResult.verdict}
+                      </span>
+                    </button>
+                    {qualityExpanded && (
+                      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 px-3 py-2 space-y-1.5">
+                        {qualityResult.issues.length === 0 ? (
+                          <p className="text-xs text-green-600 dark:text-green-400">Không phát hiện vấn đề nào.</p>
+                        ) : (
+                          qualityResult.issues.map((issue, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-xs">
+                              <span className={`shrink-0 font-semibold ${
+                                issue.severity === 'critical' ? 'text-red-600 dark:text-red-400'
+                                : issue.severity === 'major' ? 'text-orange-500 dark:text-orange-400'
+                                : 'text-yellow-600 dark:text-yellow-400'
+                              }`}>
+                                {issue.severity === 'critical' ? '[Nghiêm trọng]' : issue.severity === 'major' ? '[Quan trọng]' : '[Nhỏ]'}
+                              </span>
+                              <span className="text-gray-700 dark:text-gray-300">{issue.message}</span>
+                            </div>
+                          ))
+                        )}
+                        {qualityResult.suggestions.length > 0 && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400 pt-0.5 border-t border-gray-200 dark:border-gray-700 mt-1">
+                            <span className="font-medium">Gợi ý: </span>{qualityResult.suggestions[0]}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Nút AI Hiệu Đính (phải) ── */}
               <Button
                 type="button"
                 variant="secondary"
@@ -499,8 +520,20 @@ export default function TranslateDemoPage() {
                       source_lang: sourceLang,
                       target_lang: targetLang,
                     });
-                    setTranslatedText(res.data.proofread);
+                    const proofread = res.data.proofread;
+                    setTranslatedText(proofread);
                     toast.success('Hiệu đính AI hoàn tất.');
+                    if (proofread && text.trim()) {
+                      setQualityLoading(true);
+                      setQualityResult(null);
+                      qualityCheckAPI.check({
+                        source: text.trim(),
+                        translated: proofread,
+                        source_lang: sourceLang,
+                        target_lang: targetLang,
+                      }).then((res2) => setQualityResult(res2.data))
+                        .catch(() => {}).finally(() => setQualityLoading(false));
+                    }
                   } catch (err: any) {
                     toast.error(err?.response?.data?.detail ?? 'Hiệu đính AI thất bại.');
                   } finally {

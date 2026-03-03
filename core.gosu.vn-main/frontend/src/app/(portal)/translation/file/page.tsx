@@ -3,7 +3,9 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Button from '@/components/ui/Button';
 import { useToastContext } from '@/context/ToastContext';
-import { translateAPI, languageAPI, gameAPI, gameCategoryAPI, promptsAPI, proofreadAPI } from '@/lib/api';
+import { translateAPI, languageAPI, gameAPI, gameCategoryAPI, promptsAPI, proofreadAPI, jobAPI, qualityCheckAPI } from '@/lib/api';
+import type { QualityCheckResult } from '@/lib/api';
+import { authStore } from '@/lib/auth';
 import type { TranslateStreamProgressEvent } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
 
@@ -82,6 +84,13 @@ export default function TranslationFilePage() {
   const [s5FindText, setS5FindText] = useState('');
   const [s5ReplaceText, setS5ReplaceText] = useState('');
   const [s5ProofMode, setS5ProofMode] = useState(false);
+  const [s5SaveJobLoading, setS5SaveJobLoading] = useState(false);
+
+  // ── Step-5 Quality Check state ────────────────────────────────────────────
+  const [s5QualityScores, setS5QualityScores] = useState<Record<number, QualityCheckResult>>({});
+  const [s5QualityLoading, setS5QualityLoading] = useState(false);
+  const [s5QualityExpanded, setS5QualityExpanded] = useState<number | null>(null);
+  const [s5RetranslateLoadingIds, setS5RetranslateLoadingIds] = useState<Set<number>>(new Set());
 
   // ── Config Step 3 ────────────────────────────────────────────────────────
   const [translateStyle, setTranslateStyle] = useState('');
@@ -157,9 +166,10 @@ export default function TranslationFilePage() {
       setGameOptions((gRes?.data?.data ?? []).map((g: any) => ({ id: g.id, name: g.name })));
       setGameCategoryOptions((gcRes?.data?.items ?? []).map((c: any) => ({ id: c.id, name: c.name })));
 
-      const prompts = (pRes?.data ?? []).map((p: any) => ({ id: p.id, name: p.name }));
+      const prompts = (pRes?.data ?? []).map((p: any) => ({ id: p.id, name: p.name, is_default: p.is_default }));
       setPromptOptions(prompts);
-      // Auto-select prompt "Dịch nội dung" làm mặc định
+      const defaultPrompt = prompts.find((p: any) => p.is_default);
+      if (defaultPrompt) setPromptId(defaultPrompt.id);
     }).finally(() => {
       if (mounted) setLoadingConfig(false);
     });
@@ -217,6 +227,8 @@ export default function TranslationFilePage() {
       setColumns(cols);
       setPreviewRows(rows);
       setPreviewHtml(typeof data?.preview_html === 'string' ? data.preview_html : null);
+
+      // Chỉ chọn cột thủ công: mặc định không chọn cột nào
       setSelectedColumns(cols.reduce((acc: Record<string, boolean>, c: string) => ({ ...acc, [c]: false }), {}));
       setStep(2);
     } catch (err: any) {
@@ -231,7 +243,7 @@ export default function TranslationFilePage() {
   // JSON/XML: không cần chọn cột → luôn cho qua; CSV/XLSX/DOCX: cần chọn ít nhất 1
   const canGoStep3 = isTreeFile || selectedCount > 0;
   // Step 3: cần chọn đủ ngôn ngữ nguồn + đích và khác nhau
-  const canStartTranslate = !!sourceLang && !!targetLang && sourceLang !== targetLang && !!promptId && !loading;
+  const canStartTranslate = !!sourceLang && !!targetLang && sourceLang !== targetLang && !loading;
 
   /** Tải file kết quả dịch. Với JSON: nếu có translatedJsonStructure thì tải bản giữ cấu trúc gốc, chỉ cột đã dịch thay đổi. */
   const downloadTranslatedFile = useCallback(
@@ -305,27 +317,153 @@ export default function TranslationFilePage() {
     [file?.name, toast, translatedJsonStructure, translatedDocxB64]
   );
 
+  // ── Save to Jobs ──────────────────────────────────────────────────────────
+
+  const s5SaveToJob = useCallback(async (jobType: 'translation') => {
+    setS5SaveJobLoading(true);
+    try {
+      const user = await authStore.getCurrentUser();
+      if (!user?.id) { toast.error('Vui lòng đăng nhập để lưu vào Jobs.'); return; }
+      const jobCode = `${jobType.toUpperCase()}-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      await jobAPI.create({
+        job_code: jobCode,
+        job_type: jobType,
+        status: 'completed',
+        progress: 100,
+        user_id: user.id,
+        source_lang: sourceLang || null,
+        target_lang: targetLang || null,
+        payload: {
+          filename: file?.name ?? null,
+          total_rows: previewRows.length,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+        },
+        result: { total_rows: previewRows.length, saved_at: new Date().toISOString() },
+      });
+      toast.success('Đã lưu vào Jobs. Bạn có thể xem tại trang Công việc của tôi.');
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Không thể lưu vào Jobs.');
+    } finally {
+      setS5SaveJobLoading(false);
+    }
+  }, [file?.name, sourceLang, targetLang, previewRows.length, toast]);
+
   // ── Step-5 helpers ────────────────────────────────────────────────────────
 
+  /** Chạy kiểm tra chất lượng hàng loạt cho toàn bộ s5Rows. */
+  const s5RunQualityCheck = useCallback(async (rows?: typeof s5Rows) => {
+    const targets = rows ?? s5Rows;
+    if (!targets.length) { toast.error('Chưa có dòng nào để kiểm tra.'); return; }
+    setS5QualityLoading(true);
+    try {
+      const res = await qualityCheckAPI.checkBatch({
+        items: targets.map((r) => ({
+          source: r.original,
+          translated: r.translated,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+        })),
+      });
+      const map: Record<number, QualityCheckResult> = {};
+      res.data.results.forEach((result, idx) => { map[targets[idx].id] = result; });
+      setS5QualityScores((prev) => ({ ...prev, ...map }));
+      const { avg_score, retranslate_count } = res.data;
+      toast.success(`Kiểm tra xong. Điểm TB: ${avg_score}/100 · ${retranslate_count} dòng cần dịch lại.`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail ?? 'Kiểm tra chất lượng thất bại.');
+    } finally {
+      setS5QualityLoading(false);
+    }
+  }, [s5Rows, sourceLang, targetLang, toast]);
+
+  /** Dịch lại 1 dòng chất lượng thấp bằng AI (fresh translate, không dùng cache). */
+  const s5RetranslateRow = useCallback(async (id: number) => {
+    const row = s5Rows.find((r) => r.id === id);
+    if (!row || !sourceLang || !targetLang) return;
+    setS5RetranslateLoadingIds((prev) => new Set(prev).add(id));
+    try {
+      const res = await translateAPI.translate({
+        text: row.original,
+        source_lang: sourceLang,
+        target_lang: targetLang,
+        prompt_id: promptId,
+        context: translateContext || null,
+        style: translateStyle || null,
+      });
+      const newTranslated = res.data.translated_text ?? row.translated;
+      setS5Rows((prev) => prev.map((r) => r.id === id ? { ...r, translated: newTranslated, status: 'edited' } : r));
+      // Re-check quality for this single row
+      const qres = await qualityCheckAPI.check({
+        source: row.original,
+        translated: newTranslated,
+        source_lang: sourceLang,
+        target_lang: targetLang,
+      });
+      setS5QualityScores((prev) => ({ ...prev, [id]: qres.data }));
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail ?? 'Dịch lại thất bại.');
+    } finally {
+      setS5RetranslateLoadingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  }, [s5Rows, sourceLang, targetLang, promptId, translateContext, translateStyle, toast]);
+
   /** Build S5Rows từ previewRows khi dịch file xong. */
-  const buildS5Rows = useCallback((rows: Record<string, string>[]) => {
+  const buildS5Rows = useCallback((rows: Record<string, string>[], srcLang?: string, tgtLang?: string, colsSelected?: string[]) => {
     const firstRow = rows[0] || {};
     let origCol = '', transCol = '';
-    for (const k of Object.keys(firstRow)) {
-      if (k.endsWith('_translated')) {
-        const orig = k.replace(/_translated$/, '');
-        if (firstRow[orig] !== undefined) { origCol = orig; transCol = k; break; }
+
+    // Ưu tiên dùng cột được chọn để dịch (tránh nhầm cột _translated có sẵn trong file gốc)
+    if (colsSelected && colsSelected.length > 0) {
+      for (const col of colsSelected) {
+        const trans = col + '_translated';
+        if (firstRow[col] !== undefined && firstRow[trans] !== undefined) {
+          origCol = col; transCol = trans; break;
+        }
+      }
+    }
+    // Fallback: quét các cột kết thúc _translated mà KHÔNG phải cột gốc từ file
+    if (!origCol) {
+      const selectedSet = new Set(colsSelected ?? []);
+      for (const k of Object.keys(firstRow)) {
+        if (k.endsWith('_translated')) {
+          const orig = k.replace(/_translated$/, '');
+          // Chỉ chọn nếu cột gốc tồn tại VÀ không phải cột đã có trong file (hoặc không có danh sách selected)
+          if (firstRow[orig] !== undefined && (selectedSet.size === 0 || selectedSet.has(orig))) {
+            origCol = orig; transCol = k; break;
+          }
+        }
       }
     }
     if (!origCol) return;
     setS5OrigCol(origCol);
     setS5TransCol(transCol);
-    setS5Rows(
-      rows
-        .map((r, i) => ({ id: i + 1, original: r[origCol] ?? '', translated: r[transCol] ?? '', status: 'original' as S5Status, selected: false }))
-        .filter((r) => r.original.trim() !== '')
-    );
+    const newRows = rows
+      .map((r, i) => ({ id: i + 1, original: r[origCol] ?? '', translated: r[transCol] ?? '', status: 'original' as S5Status, selected: false }))
+      .filter((r) => r.original.trim() !== '');
+    setS5Rows(newRows);
     setS5Search(''); setS5SelectAll(false); setS5FindText(''); setS5ReplaceText(''); setS5ProofMode(false);
+    setS5QualityScores({}); setS5QualityExpanded(null);
+
+    // Tự động kiểm tra chất lượng ngay sau khi build rows (không qua state để tránh closure stale)
+    if (newRows.length > 0) {
+      setS5QualityLoading(true);
+      qualityCheckAPI.checkBatch({
+        items: newRows.map((r) => ({
+          source: r.original,
+          translated: r.translated,
+          source_lang: srcLang ?? '',
+          target_lang: tgtLang ?? '',
+        })),
+      }).then((res) => {
+        const map: Record<number, QualityCheckResult> = {};
+        res.data.results.forEach((result, idx) => { map[newRows[idx].id] = result; });
+        setS5QualityScores(map);
+      }).catch(() => {
+        // Không làm gián đoạn luồng chính nếu quality check thất bại
+      }).finally(() => setS5QualityLoading(false));
+    }
   }, []);
 
   const s5Edit = (id: number, value: string) =>
@@ -403,6 +541,22 @@ export default function TranslationFilePage() {
 
   const s5EditedCount = s5Rows.filter((r) => r.status === 'edited').length;
   const s5AiCount = s5Rows.filter((r) => r.status === 'ai-proofread').length;
+  const s5QualityCheckedCount = Object.keys(s5QualityScores).length;
+  const s5QualityAvg = s5QualityCheckedCount > 0
+    ? Math.round(Object.values(s5QualityScores).reduce((a, b) => a + b.score, 0) / s5QualityCheckedCount)
+    : null;
+
+  const getScoreBadgeCls = (score: number) => {
+    if (score >= 85) return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 border border-green-200 dark:border-green-800';
+    if (score >= 70) return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800';
+    if (score >= 60) return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 border border-orange-200 dark:border-orange-800';
+    return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 border border-red-200 dark:border-red-800';
+  };
+  const getSeverityCls = (severity: string) => {
+    if (severity === 'critical') return 'text-red-600 dark:text-red-400';
+    if (severity === 'major') return 'text-orange-600 dark:text-orange-400';
+    return 'text-yellow-600 dark:text-yellow-500';
+  };
   const s5SelectedCount = s5Rows.filter((r) => r.selected).length;
   const s5Filtered = s5Search.trim() ? s5Rows.filter((r) => r.original.toLowerCase().includes(s5Search.toLowerCase()) || r.translated.toLowerCase().includes(s5Search.toLowerCase())) : s5Rows;
 
@@ -496,14 +650,14 @@ export default function TranslationFilePage() {
             {isTreeFile ? 'Xem Trước Nội Dung' : 'Xem Trước & Chọn Cột'}
           </h2>
 
-          {/* ── Chọn cột: chỉ hiện với CSV/XLSX/DOCX ── */}
+          {/* ── Chọn cột thủ công: chỉ hiện với CSV/XLSX/DOCX ── */}
           {!isTreeFile && (
-            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
-              <div className="flex items-center justify-between mb-2">
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 p-4">
+              <div className="flex items-center justify-between mb-3">
                 <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Chọn cột cần dịch</p>
                 <button
                   type="button"
-                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                   onClick={() => {
                     const all = columns.every((c) => selectedColumns[c]);
                     setSelectedColumns(columns.reduce((acc, c) => ({ ...acc, [c]: !all }), {}));
@@ -772,26 +926,19 @@ export default function TranslationFilePage() {
           {/* ── Prompt Dịch thuật ── */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Prompt Dịch thuật <span className="text-red-500 ml-0.5">*</span>
+              Prompt Dịch thuật
             </label>
             <select
               value={promptId ?? ''}
               onChange={(e) => setPromptId(e.target.value ? Number(e.target.value) : null)}
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm ${
-                !promptId
-                  ? 'border-red-400 dark:border-red-500'
-                  : 'border-gray-300 dark:border-gray-600'
-              }`}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
               disabled={loadingConfig}
             >
-              <option value="">-- Chọn prompt --</option>
+              <option value="">Prompt mặc định</option>
               {promptOptions.map((p) => (
                 <option key={p.id} value={String(p.id)}>{p.name}</option>
               ))}
             </select>
-            {!promptId && !loadingConfig && (
-              <p className="text-xs text-red-500 dark:text-red-400 mt-1">Vui lòng chọn prompt dịch thuật.</p>
-            )}
           </div>
 
           <div className="flex justify-between pt-1">
@@ -911,7 +1058,7 @@ export default function TranslationFilePage() {
                   setTranslatedJsonStructure(done.translated_json ?? null);
                   setTranslatedDocxB64(done.translated_docx_b64 ?? null);
                   setProgress(null);
-                  buildS5Rows(doneRows);
+                  buildS5Rows(doneRows, sourceLang, targetLang, colsToTranslate);
                   try { localStorage.setItem('gosu_last_file_lang_pair', JSON.stringify({ source: sourceLang, target: targetLang })); } catch { /* noop */ }
                   setStep(5);
                   toast.success('Dịch file hoàn tất.');
@@ -1203,12 +1350,79 @@ export default function TranslationFilePage() {
 
         // ── Chế độ preview (mặc định) ──────────────────────────────────────
         if (!s5ProofMode) {
+          const qScores = Object.values(s5QualityScores);
+          const qGood  = qScores.filter((q) => q.score >= 85).length;
+          const qOk    = qScores.filter((q) => q.score >= 70 && q.score < 85).length;
+          const qWarn  = qScores.filter((q) => q.score >= 60 && q.score < 70).length;
+          const qBad   = qScores.filter((q) => q.score < 60).length;
+          const qTotal = qScores.length;
+
           return (
             <div className="space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Xem trước Dịch thuật</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Đã dịch {previewRows.length} dòng. Cột gốc và cột _translated (bản dịch).
-              </p>
+              {/* Header */}
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Kết quả Dịch thuật</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  Đã dịch {previewRows.length} dòng · {sourceLang} → {targetLang}
+                </p>
+              </div>
+
+              {/* Quality summary panel */}
+              {s5QualityLoading && qTotal === 0 && (
+                <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 flex items-center gap-3">
+                  <svg className="animate-spin w-5 h-5 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                  </svg>
+                  <p className="text-sm text-blue-700 dark:text-blue-300">Đang kiểm tra chất lượng {s5Rows.length} dòng…</p>
+                </div>
+              )}
+
+              {qTotal > 0 && (
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-4">
+                  <div className="flex items-center gap-6 flex-wrap">
+                    {/* Điểm trung bình */}
+                    <div className="text-center min-w-[72px]">
+                      <div className={`text-4xl font-bold tabular-nums ${s5QualityAvg !== null && s5QualityAvg >= 85 ? 'text-green-600 dark:text-green-400' : s5QualityAvg !== null && s5QualityAvg >= 70 ? 'text-yellow-600 dark:text-yellow-400' : s5QualityAvg !== null && s5QualityAvg >= 60 ? 'text-orange-500 dark:text-orange-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {s5QualityAvg}
+                      </div>
+                      <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Điểm TB / 100</div>
+                    </div>
+
+                    {/* Phân bố */}
+                    <div className="flex-1 min-w-[200px] space-y-1.5">
+                      {[
+                        { label: 'Tốt (≥85)',           count: qGood,  color: 'bg-green-500',  textCls: 'text-green-600 dark:text-green-400' },
+                        { label: 'Chấp nhận (70–84)',   count: qOk,    color: 'bg-yellow-400', textCls: 'text-yellow-600 dark:text-yellow-400' },
+                        { label: 'Cần cải thiện (60–69)', count: qWarn, color: 'bg-orange-400', textCls: 'text-orange-500 dark:text-orange-400' },
+                        { label: 'Cần dịch lại (<60)',  count: qBad,   color: 'bg-red-500',    textCls: 'text-red-600 dark:text-red-400' },
+                      ].map(({ label, count, color, textCls }) => (
+                        <div key={label} className="flex items-center gap-2 text-xs">
+                          <span className="w-36 text-gray-500 dark:text-gray-400 shrink-0">{label}</span>
+                          <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-2 rounded-full transition-all duration-500 ${color}`}
+                              style={{ width: qTotal > 0 ? `${(count / qTotal) * 100}%` : '0%' }}
+                            />
+                          </div>
+                          <span className={`w-8 text-right font-medium tabular-nums ${textCls}`}>{count}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Nút hành động */}
+                    {(qBad > 0 || qWarn > 0) && (
+                      <div className="flex flex-col gap-2 shrink-0">
+                        <Button size="sm" onClick={() => setS5ProofMode(true)}>
+                          Hiệu đính {qBad + qWarn} dòng lỗi
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Bảng dữ liệu */}
               <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
                 <table className="w-full text-sm">
                   <thead>
@@ -1229,7 +1443,8 @@ export default function TranslationFilePage() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex gap-2">
+
+              <div className="flex gap-2 flex-wrap">
                 <Button onClick={() => setS5ProofMode(true)}>Hiệu Đính</Button>
                 <Button variant="secondary" onClick={() => downloadTranslatedFile(previewRows, displayColumns)} disabled={displayColumns.length === 0 || previewRows.length === 0}>
                   Tải File
@@ -1251,9 +1466,14 @@ export default function TranslationFilePage() {
                 {s5Rows.length} dòng
                 {s5EditedCount > 0 && <span className="ml-2 text-amber-600 dark:text-amber-400">&bull; {s5EditedCount} đã sửa</span>}
                 {s5AiCount > 0 && <span className="ml-2 text-green-600 dark:text-green-400">&bull; {s5AiCount} AI hiệu đính</span>}
+                {s5QualityAvg !== null && (
+                  <span className={`ml-2 font-medium ${s5QualityAvg >= 85 ? 'text-green-600 dark:text-green-400' : s5QualityAvg >= 70 ? 'text-yellow-600 dark:text-yellow-400' : s5QualityAvg >= 60 ? 'text-orange-600 dark:text-orange-400' : 'text-red-600 dark:text-red-400'}`}>
+                    &bull; Chất lượng TB: {s5QualityAvg}/100
+                  </span>
+                )}
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button type="button" onClick={() => setS5ProofMode(false)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
                 Xem trước
@@ -1320,53 +1540,132 @@ export default function TranslationFilePage() {
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">GỐC</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">ĐÃ DỊCH</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-28">TRẠNG THÁI</th>
+                    {s5QualityCheckedCount > 0 && (
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-20">ĐIỂM</th>
+                    )}
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">THAO TÁC</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
                   {s5Filtered.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400 text-sm">{s5Search ? 'Không tìm thấy kết quả.' : 'Chưa có dữ liệu.'}</td></tr>
+                    <tr><td colSpan={s5QualityCheckedCount > 0 ? 7 : 6} className="px-4 py-8 text-center text-gray-400 text-sm">{s5Search ? 'Không tìm thấy kết quả.' : 'Chưa có dữ liệu.'}</td></tr>
                   )}
                   {s5Filtered.map((row) => {
                     const badge = S5_BADGE[row.status];
                     const isLoading = row.status === 'loading';
+                    const qr = s5QualityScores[row.id];
+                    const isExpanded = s5QualityExpanded === row.id;
+                    const isRetranslating = s5RetranslateLoadingIds.has(row.id);
+                    const colSpan = s5QualityCheckedCount > 0 ? 7 : 6;
                     return (
-                      <tr key={row.id} className={`transition-colors ${row.selected ? 'bg-brand-50/40 dark:bg-brand-900/10' : 'bg-white dark:bg-gray-800 hover:bg-gray-50/80 dark:hover:bg-gray-700/20'}`}>
-                        <td className="px-4 py-3">
-                          <input type="checkbox" checked={row.selected} onChange={(e) => s5SelectRow(row.id, e.target.checked)} className="rounded border-gray-300 text-brand-600" />
-                        </td>
-                        <td className="px-4 py-3 text-gray-400 font-mono text-xs align-top pt-4">{row.id}</td>
-                        <td className="px-4 py-3 text-gray-700 dark:text-gray-300 align-top max-w-[220px]">
-                          <div className="break-words leading-relaxed text-xs">{row.original}</div>
-                        </td>
-                        <td className="px-4 py-3 align-top max-w-[280px]">
-                          {isLoading ? (
-                            <div className="flex items-center gap-2 text-gray-400 py-1 text-xs">
-                              <svg className="animate-spin w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                              Đang hiệu đính…
-                            </div>
-                          ) : (
-                            <textarea
-                              value={row.translated}
-                              onChange={(e) => s5Edit(row.id, e.target.value)}
-                              rows={Math.max(2, Math.ceil(row.translated.length / 48))}
-                              className={`w-full px-2 py-1.5 text-sm border rounded-lg resize-none transition-colors bg-transparent focus:outline-none text-gray-900 dark:text-gray-100 ${
-                                row.status === 'ai-proofread' ? 'border-green-300 dark:border-green-700 bg-green-50/50 dark:bg-green-900/10'
-                                : row.status === 'edited' ? 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10'
-                                : 'border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-brand-400 focus:bg-white dark:focus:bg-gray-900'
-                              }`}
-                            />
+                      <React.Fragment key={row.id}>
+                        <tr className={`transition-colors ${row.selected ? 'bg-brand-50/40 dark:bg-brand-900/10' : 'bg-white dark:bg-gray-800 hover:bg-gray-50/80 dark:hover:bg-gray-700/20'}`}>
+                          <td className="px-4 py-3">
+                            <input type="checkbox" checked={row.selected} onChange={(e) => s5SelectRow(row.id, e.target.checked)} className="rounded border-gray-300 text-brand-600" />
+                          </td>
+                          <td className="px-4 py-3 text-gray-400 font-mono text-xs align-top pt-4">{row.id}</td>
+                          <td className="px-4 py-3 text-gray-700 dark:text-gray-300 align-top max-w-[220px]">
+                            <div className="break-words leading-relaxed text-xs">{row.original}</div>
+                          </td>
+                          <td className="px-4 py-3 align-top max-w-[280px]">
+                            {isLoading ? (
+                              <div className="flex items-center gap-2 text-gray-400 py-1 text-xs">
+                                <svg className="animate-spin w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                                Đang hiệu đính…
+                              </div>
+                            ) : (
+                              <textarea
+                                value={row.translated}
+                                onChange={(e) => s5Edit(row.id, e.target.value)}
+                                rows={Math.max(2, Math.ceil(row.translated.length / 48))}
+                                className={`w-full px-2 py-1.5 text-sm border rounded-lg resize-none transition-colors bg-transparent focus:outline-none text-gray-900 dark:text-gray-100 ${
+                                  row.status === 'ai-proofread' ? 'border-green-300 dark:border-green-700 bg-green-50/50 dark:bg-green-900/10'
+                                  : row.status === 'edited' ? 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10'
+                                  : 'border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-brand-400 focus:bg-white dark:focus:bg-gray-900'
+                                }`}
+                              />
+                            )}
+                          </td>
+                          <td className="px-4 py-3 align-top pt-4">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${badge.cls}`}>{badge.label}</span>
+                          </td>
+                          {/* ── Cột ĐIỂM (chỉ hiện sau khi đã chạy quality check) ── */}
+                          {s5QualityCheckedCount > 0 && (
+                            <td className="px-4 py-3 align-top pt-3">
+                              {qr ? (
+                                <button
+                                  type="button"
+                                  title={`${qr.verdict} · Click để xem chi tiết`}
+                                  onClick={() => setS5QualityExpanded(isExpanded ? null : row.id)}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold cursor-pointer transition-opacity hover:opacity-80 ${getScoreBadgeCls(qr.score)}`}
+                                >
+                                  {qr.score}
+                                  <svg className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </button>
+                              ) : (
+                                <span className="text-xs text-gray-300 dark:text-gray-600">—</span>
+                              )}
+                            </td>
                           )}
-                        </td>
-                        <td className="px-4 py-3 align-top pt-4">
-                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${badge.cls}`}>{badge.label}</span>
-                        </td>
-                        <td className="px-4 py-3 align-top pt-3.5">
-                          <button type="button" disabled={isLoading || s5BatchLoading} onClick={() => s5ProofreadRow(row.id)} className="text-xs text-brand-600 dark:text-brand-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
-                            AI Hiệu Đính
-                          </button>
-                        </td>
-                      </tr>
+                          <td className="px-4 py-3 align-top pt-3.5">
+                            <div className="flex flex-col gap-1">
+                              <button type="button" disabled={isLoading || s5BatchLoading} onClick={() => s5ProofreadRow(row.id)} className="text-xs text-brand-600 dark:text-brand-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+                                AI Hiệu Đính
+                              </button>
+                              {qr?.should_retranslate && (
+                                <button
+                                  type="button"
+                                  disabled={isRetranslating || isLoading}
+                                  onClick={() => s5RetranslateRow(row.id)}
+                                  className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                                >
+                                  {isRetranslating ? 'Đang dịch…' : 'Dịch lại'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        {/* ── Expanded quality details row ── */}
+                        {isExpanded && qr && (
+                          <tr className="bg-gray-50 dark:bg-gray-900/40">
+                            <td colSpan={colSpan} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700/50">
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-3">
+                                  <span className={`text-sm font-semibold ${getScoreBadgeCls(qr.score)} px-2.5 py-0.5 rounded-full`}>
+                                    {qr.score}/100 — {qr.verdict}
+                                  </span>
+                                  {qr.issues.length === 0 && (
+                                    <span className="text-xs text-green-600 dark:text-green-400">Không phát hiện vấn đề nào.</span>
+                                  )}
+                                </div>
+                                {qr.issues.length > 0 && (
+                                  <ul className="space-y-1">
+                                    {qr.issues.map((issue, i) => (
+                                      <li key={i} className="flex items-start gap-2 text-xs">
+                                        <span className={`shrink-0 font-semibold uppercase ${getSeverityCls(issue.severity)}`}>
+                                          [{issue.severity === 'critical' ? 'Nghiêm trọng' : issue.severity === 'major' ? 'Quan trọng' : 'Nhỏ'}]
+                                        </span>
+                                        <span className="text-gray-700 dark:text-gray-300">{issue.message}</span>
+                                        {issue.suggestion && (
+                                          <span className="text-gray-400 dark:text-gray-500 italic">→ {issue.suggestion}</span>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                                {qr.suggestions.length > 0 && (
+                                  <div className="text-xs text-blue-600 dark:text-blue-400 pt-1">
+                                    <span className="font-medium">Gợi ý: </span>
+                                    {qr.suggestions[0]}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>

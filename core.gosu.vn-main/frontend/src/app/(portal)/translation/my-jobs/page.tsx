@@ -218,11 +218,20 @@ function MyJobsPage() {
       key: 'job_type',
       header: 'Loại',
       sortable: false,
-      render: (j) => (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
-          {j.job_type}
-        </span>
-      ),
+      render: (j) => {
+        const JOB_TYPE_META: Record<string, { label: string; cls: string }> = {
+          translation:     { label: 'translation',     cls: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
+          proofread:       { label: 'proofread',       cls: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' },
+          glossary_update: { label: 'glossary_update', cls: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' },
+          other:           { label: 'other',           cls: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' },
+        };
+        const meta = JOB_TYPE_META[j.job_type] ?? { label: j.job_type, cls: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300' };
+        return (
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${meta.cls}`}>
+            {meta.label}
+          </span>
+        );
+      },
     },
     {
       key: 'status',
@@ -246,7 +255,8 @@ function MyJobsPage() {
       header: 'Tiến độ',
       sortable: false,
       render: (j) => {
-        const pct = j.progress || 0;
+        const isCompleted = j.status === 'completed';
+        const pct = isCompleted ? 100 : (j.progress || 0);
         const isActive = j.status === 'in_progress';
         return (
           <div className="flex items-center gap-2">
@@ -262,7 +272,10 @@ function MyJobsPage() {
                   }}
                 />
               ) : (
-                <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${pct}%` }} />
+                <div
+                  className={`h-2 rounded-full ${isCompleted ? 'bg-green-500' : 'bg-blue-600'}`}
+                  style={{ width: `${pct}%` }}
+                />
               )}
             </div>
             <span className="text-sm text-gray-600 dark:text-gray-400">
@@ -459,10 +472,15 @@ function MyJobsPage() {
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-gray-500 dark:text-gray-400">Tiến độ</span>
-                    <span className="font-semibold text-gray-900 dark:text-gray-100">{viewingJob.progress ?? 0}%</span>
+                    <span className="font-semibold text-gray-900 dark:text-gray-100">
+                      {viewingJob.status === 'completed' ? 100 : (viewingJob.progress ?? 0)}%
+                    </span>
                   </div>
                   <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                    <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${viewingJob.progress ?? 0}%` }} />
+                    <div
+                      className={`h-2 rounded-full transition-all ${viewingJob.status === 'completed' ? 'bg-green-500' : 'bg-blue-600'}`}
+                      style={{ width: `${viewingJob.status === 'completed' ? 100 : (viewingJob.progress ?? 0)}%` }}
+                    />
                   </div>
                 </div>
               </div>
