@@ -451,6 +451,11 @@ async def save_translation_to_cache(
     """
     if not translated:
         return
+    # Không lưu cache khi bản dịch trả về đúng bản gốc (tránh lưu bản dịch "giả")
+    orig_stripped = (text or "").strip()
+    trans_stripped = (translated or "").strip()
+    if orig_stripped and trans_stripped and orig_stripped == trans_stripped:
+        return
     origin = (origin or CACHE_ORIGIN_DIRECT).strip() or CACHE_ORIGIN_DIRECT
     key = _cache_key(source_lang, target_lang, text)
     cache_svc = CacheService(db)

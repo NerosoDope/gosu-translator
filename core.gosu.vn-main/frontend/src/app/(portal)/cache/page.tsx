@@ -36,6 +36,14 @@ function formatDateTime(s: string | null | undefined): string {
   }
 }
 
+/** Parse cặp ngôn ngữ từ cache key (format: translate:source_lang:target_lang:hash). */
+function getLanguagePairFromKey(key: string | null | undefined): { source: string; target: string } | null {
+  if (!key || typeof key !== 'string') return null;
+  const parts = key.split(':');
+  if (parts[0] !== 'translate' || parts.length < 4) return null;
+  return { source: parts[1], target: parts[2] };
+}
+
 function CachePageContent() {
   const toast = useToastContext();
   const [items, setItems] = useState<CacheItem[]>([]);
@@ -336,6 +344,17 @@ function CachePageContent() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm">
+                {(() => {
+                  const pair = getLanguagePairFromKey(detailItem.key);
+                  return pair ? (
+                    <div className="col-span-2">
+                      <span className="text-gray-500 dark:text-gray-400">Cặp ngôn ngữ</span>
+                      <p className="font-medium text-gray-900 dark:text-gray-100">
+                        {pair.source} → {pair.target}
+                      </p>
+                    </div>
+                  ) : null;
+                })()}
                 <div>
                   <span className="text-gray-500 dark:text-gray-400">Nguồn</span>
                   <p className="font-medium text-gray-900 dark:text-gray-100">
