@@ -85,7 +85,6 @@ function canDo(action: string, status: string, isDeleted: boolean): boolean {
     completed:   ['delete'],
     failed:      ['retry', 'delete'],
     cancelled:   ['retry', 'delete'],
-    review:      ['retry', 'delete'],
   };
   return (allowed[status] ?? []).includes(action);
 }
@@ -96,7 +95,6 @@ const STATUS_LABELS: Record<string, string> = {
   completed: 'Hoàn thành',
   failed: 'Thất bại',
   cancelled: 'Đã hủy',
-  review: 'Cần xem lại',
 };
 
 /** Nguồn tạo job: từ payload.source_type hoặc suy từ job_code/payload (job cũ). */
@@ -407,7 +405,6 @@ function JobPageContent() {
           completed: 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400',
           failed: 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400',
           cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
-          review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/20 dark:text-amber-400',
         };
         return (
             <div className="flex flex-col gap-1 w-fit">
@@ -578,7 +575,6 @@ function JobPageContent() {
               <option value="completed">Hoàn thành</option>
               <option value="failed">Thất bại</option>
               <option value="cancelled">Đã hủy</option>
-              <option value="review">Cần xem lại</option>
             </select>
 
             <select
@@ -792,7 +788,6 @@ function JobPageContent() {
                       completed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
                       failed: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
                       cancelled: 'bg-gray-200 text-gray-700 dark:bg-gray-600 dark:text-gray-300',
-                      review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
                     };
                     return (
                       <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[viewingJob.status] || statusColors.pending}`}>

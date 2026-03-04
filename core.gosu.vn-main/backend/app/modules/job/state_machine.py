@@ -7,28 +7,25 @@ Job State Machine
                   │                                 │
    create ──► pending ──► in_progress ──► completed │ (terminal)
                   │  ▲        │                     │
-                  │  │        ├──► review (đã có thay đổi dù 1 dòng, nhưng lỗi sau đó — vd trả về text gốc)
-                  │  │        │         │           │
-              cancelled ◄── failed      └── retry ──┘
-                  │  ▲
-                  │  │ retry
+                  │  │        └──► failed           │
+              cancelled ◄── failed                  │
+                  │  ▲        │                     │
+                  │  │ retry  └── retry ─────────────┘
                   └──┘
-                                                    │
-   Soft-delete có thể áp dụng với mọi trạng thái.  │
-   Hard-delete chỉ khi đã soft-delete.              │
-   ──────────────────────────────────────────────────┘
+
+   Soft-delete có thể áp dụng với mọi trạng thái.
+   Hard-delete chỉ khi đã soft-delete.
 
 Bảng chuyển trạng thái:
-┌─────────────────┬──────────────────────────────────────────────────────┐
-│ Trạng thái hiện │ Trạng thái tiếp theo hợp lệ                          │
-├─────────────────┼──────────────────────────────────────────────────────┤
-│ pending         │ in_progress, cancelled                               │
-│ in_progress     │ completed, failed, review, cancelled                 │  # failed = không dịch ra gì; review = có thay đổi nhưng lỗi
-│ completed       │ (terminal — không chuyển được)                       │
-│ failed          │ pending (retry)                                      │
-│ cancelled       │ pending (retry)                                      │
-│ review          │ pending (retry), completed (đánh dấu xong xem lại)  │
-└─────────────────┴──────────────────────────────────────────────────────┘
+┌─────────────────┬────────────────────────────────────┐
+│ Trạng thái hiện │ Trạng thái tiếp theo hợp lệ        │
+├─────────────────┼────────────────────────────────────┤
+│ pending         │ in_progress, cancelled             │
+│ in_progress     │ completed, failed, cancelled      │
+│ completed       │ (terminal — không chuyển được)    │
+│ failed          │ pending (retry)                    │
+│ cancelled       │ pending (retry)                    │
+└─────────────────┴────────────────────────────────────┘
 """
 
 from enum import Enum
@@ -41,7 +38,6 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    REVIEW = "review"  # Đã có thay đổi (dù 1 dòng) nhưng lỗi ở đoạn sau — vd trả về text gốc
 
 
 # Các trạng thái terminal (không thể chuyển tiếp)
@@ -50,11 +46,10 @@ TERMINAL_STATES: Set[JobStatus] = {JobStatus.COMPLETED}
 # Bảng chuyển trạng thái hợp lệ
 VALID_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     JobStatus.PENDING:      {JobStatus.IN_PROGRESS, JobStatus.CANCELLED},
-    JobStatus.IN_PROGRESS:  {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.REVIEW, JobStatus.CANCELLED},
-    JobStatus.COMPLETED:    set(),  # terminal
-    JobStatus.FAILED:       {JobStatus.PENDING},   # retry
-    JobStatus.CANCELLED:    {JobStatus.PENDING},   # retry
-    JobStatus.REVIEW:       {JobStatus.PENDING, JobStatus.COMPLETED},  # retry hoặc đánh dấu hoàn thành sau khi xem lại
+    JobStatus.IN_PROGRESS:  {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED},
+    JobStatus.COMPLETED:   set(),  # terminal
+    JobStatus.FAILED:      {JobStatus.PENDING},   # retry
+    JobStatus.CANCELLED:   {JobStatus.PENDING},   # retry
 }
 
 # Các action được phép ở từng trạng thái (dùng cho frontend buttons)
@@ -64,7 +59,6 @@ ALLOWED_ACTIONS: Dict[JobStatus, Set[str]] = {
     JobStatus.COMPLETED:    {"delete"},
     JobStatus.FAILED:       {"retry", "delete"},
     JobStatus.CANCELLED:    {"retry", "delete"},
-    JobStatus.REVIEW:       {"retry", "delete"},
 }
 
 # Label hiển thị tiếng Việt
@@ -74,7 +68,6 @@ STATUS_LABELS: Dict[JobStatus, str] = {
     JobStatus.COMPLETED:    "Hoàn thành",
     JobStatus.FAILED:       "Thất bại",
     JobStatus.CANCELLED:    "Đã hủy",
-    JobStatus.REVIEW:       "Cần xem lại",
 }
 
 

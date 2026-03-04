@@ -56,12 +56,10 @@ export default function TranslationFilePage() {
   const [progress, setProgress] = useState<TranslateStreamProgressEvent | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  /** Job id khi dịch file (bước 4): tạo lúc bắt đầu, cập nhật completed/cancelled/review/failed khi xong hoặc hủy */
+  /** Job id khi dịch file (bước 4): tạo lúc bắt đầu, cập nhật completed/cancelled/failed khi xong hoặc hủy */
   const translateJobIdRef = useRef<number | null>(null);
   /** Đặt true khi user bấm Hủy (để không chuyển step 5 khi request JSON/XML vẫn hoàn thành sau đó) */
   const translateCancelledByUserRef = useRef(false);
-  /** True nếu đã nhận được ít nhất một phần kết quả dịch (vd progress.done > 0) — dùng để phân biệt failed vs review khi lỗi */
-  const hasPartialTranslatedContentRef = useRef(false);
   /** Ngôn ngữ nguồn từ Quản lý ngôn ngữ */
   const [sourceLanguageOptions, setSourceLanguageOptions] = useState<LanguageItem[]>([]);
   /** Map sourceCode -> danh sách ngôn ngữ đích (từ cặp ngôn ngữ) */
@@ -1188,7 +1186,6 @@ export default function TranslationFilePage() {
                   setTranslatedJsonContent(null);
                   translateJobIdRef.current = null;
                   translateCancelledByUserRef.current = false;
-                  hasPartialTranslatedContentRef.current = false;
                   try {
                     const origText = await file.text();
                     setOriginalJsonContent(origText);
@@ -1224,11 +1221,7 @@ export default function TranslationFilePage() {
                         game_category_id: gameCategoryId,
                       },
                       (event) => {
-                        if (event.type === 'progress') {
-                          const ev = event as TranslateStreamProgressEvent;
-                          setProgress(ev);
-                          if (ev.done > 0) hasPartialTranslatedContentRef.current = true;
-                        }
+                        if (event.type === 'progress') setProgress(event as TranslateStreamProgressEvent);
                       },
                       abortRef.current.signal,
                     );
@@ -1244,32 +1237,7 @@ export default function TranslationFilePage() {
                     setStep(5);
                     toast.success('Dịch file hoàn tất.');
                     if (translateJobIdRef.current != null) {
-                      const rows = done.rows ?? [];
-                      let totalTranslatable = 0;
-                      let sameAsOriginalCount = 0;
-                      for (const row of rows) {
-                        for (const c of colsToTranslate) {
-                          const orig = (row[c] ?? '').trim();
-                          const trans = (row[c + '_translated'] ?? '').trim();
-                          if (orig !== '') {
-                            totalTranslatable++;
-                            if (orig === trans) sameAsOriginalCount++;
-                          }
-                        }
-                      }
-                      const allReturnedAsOriginal = totalTranslatable > 0 && sameAsOriginalCount === totalTranslatable;
-                      const someReturnedAsOriginal = sameAsOriginalCount > 0 && !allReturnedAsOriginal;
-                      const finalStatus = allReturnedAsOriginal ? 'failed' : someReturnedAsOriginal ? 'review' : 'completed';
-                      const finalResult = { total_rows: rows.length, saved_at: new Date().toISOString() };
-                      const errorMsg = allReturnedAsOriginal ? 'Tất cả nội dung dịch đều trả về bản gốc.' : someReturnedAsOriginal ? 'Một số đoạn trả về text gốc, cần xem lại.' : undefined;
-                      try {
-                        await jobAPI.update(translateJobIdRef.current, {
-                          status: finalStatus,
-                          progress: 100,
-                          result: finalResult,
-                          ...(errorMsg ? { error_message: errorMsg } : {}),
-                        });
-                      } catch { /* noop */ }
+                      try { await jobAPI.update(translateJobIdRef.current, { status: 'completed', progress: 100, result: { total_rows: (done.rows ?? []).length, saved_at: new Date().toISOString() } }); } catch { /* noop */ }
                       translateJobIdRef.current = null;
                     }
                   } catch (err: any) {
@@ -1285,8 +1253,7 @@ export default function TranslationFilePage() {
                       toast.error(Array.isArray(msg) ? msg.join(', ') : msg);
                       setStep(3);
                       if (translateJobIdRef.current != null) {
-                        const jobStatus = hasPartialTranslatedContentRef.current ? 'review' : 'failed';
-                        try { await jobAPI.update(translateJobIdRef.current, { status: jobStatus, error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
+                        try { await jobAPI.update(translateJobIdRef.current, { status: 'failed', error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
                         translateJobIdRef.current = null;
                       }
                     }
@@ -1305,7 +1272,6 @@ export default function TranslationFilePage() {
                   setTranslatedXmlContent(null);
                   translateJobIdRef.current = null;
                   translateCancelledByUserRef.current = false;
-                  hasPartialTranslatedContentRef.current = false;
                   try {
                     const user = await authStore.getCurrentUser();
                     if (user?.id) {
@@ -1387,7 +1353,6 @@ export default function TranslationFilePage() {
                 abortRef.current = new AbortController();
                 translateJobIdRef.current = null;
                 translateCancelledByUserRef.current = false;
-                hasPartialTranslatedContentRef.current = false;
                 try {
                   const user = await authStore.getCurrentUser();
                   if (user?.id) {
@@ -1418,11 +1383,7 @@ export default function TranslationFilePage() {
                       game_category_id: gameCategoryId,
                     },
                     (event) => {
-                      if (event.type === 'progress') {
-                        const ev = event as TranslateStreamProgressEvent;
-                        setProgress(ev);
-                        if (ev.done > 0) hasPartialTranslatedContentRef.current = true;
-                      }
+                      if (event.type === 'progress') setProgress(event as TranslateStreamProgressEvent);
                     },
                     abortRef.current.signal,
                   );
@@ -1436,30 +1397,7 @@ export default function TranslationFilePage() {
                   setStep(5);
                   toast.success('Dịch file hoàn tất.');
                   if (translateJobIdRef.current != null) {
-                    let totalTranslatable = 0;
-                    let sameAsOriginalCount = 0;
-                    for (const row of doneRows) {
-                      for (const c of colsToTranslate) {
-                        const orig = (row[c] ?? '').trim();
-                        const trans = (row[c + '_translated'] ?? '').trim();
-                        if (orig !== '') {
-                          totalTranslatable++;
-                          if (orig === trans) sameAsOriginalCount++;
-                        }
-                      }
-                    }
-                    const allReturnedAsOriginal = totalTranslatable > 0 && sameAsOriginalCount === totalTranslatable;
-                    const someReturnedAsOriginal = sameAsOriginalCount > 0 && !allReturnedAsOriginal;
-                    const finalStatus = allReturnedAsOriginal ? 'failed' : someReturnedAsOriginal ? 'review' : 'completed';
-                    const errorMsg = allReturnedAsOriginal ? 'Tất cả nội dung dịch đều trả về bản gốc.' : someReturnedAsOriginal ? 'Một số đoạn trả về text gốc, cần xem lại.' : undefined;
-                    try {
-                      await jobAPI.update(translateJobIdRef.current, {
-                        status: finalStatus,
-                        progress: 100,
-                        result: { total_rows: doneRows.length, saved_at: new Date().toISOString() },
-                        ...(errorMsg ? { error_message: errorMsg } : {}),
-                      });
-                    } catch { /* noop */ }
+                    try { await jobAPI.update(translateJobIdRef.current, { status: 'completed', progress: 100, result: { total_rows: doneRows.length, saved_at: new Date().toISOString() } }); } catch { /* noop */ }
                     translateJobIdRef.current = null;
                   }
                 } catch (err: any) {
@@ -1474,8 +1412,7 @@ export default function TranslationFilePage() {
                     const msg = err?.message ?? 'Dịch file thất bại.';
                     toast.error(Array.isArray(msg) ? msg.join(', ') : msg);
                     if (translateJobIdRef.current != null) {
-                      const jobStatus = hasPartialTranslatedContentRef.current ? 'review' : 'failed';
-                      try { await jobAPI.update(translateJobIdRef.current, { status: jobStatus, error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
+                      try { await jobAPI.update(translateJobIdRef.current, { status: 'failed', error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
                       translateJobIdRef.current = null;
                     }
                   }
