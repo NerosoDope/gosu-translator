@@ -12,15 +12,33 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.modules.translate import csv_handler, excel_handler, json_handler, word_handler
+from app.modules.translate.xml_handler import (
+    parse_xml as parse_xml_handler,
+    parse_xml_string_to_rows,
+    read_full_xml as read_full_xml_handler,
+    rebuild_xml_from_rows,
+    export_xml as export_xml_handler,
+    split_xml_declaration,
+    xml_to_string,
+    xml_local_tag as xml_local_tag_fn,
+)
+from app.modules.translate.utils import decode_text
 from app.modules.translate.schemas import (
     ExportFileRequest,
     ParseAllRowsResponse,
     ParseFileResponse,
+    ParseJsonContentRequest,
+    ParseJsonContentResponse,
+    ParseXmlContentRequest,
+    ParseXmlContentResponse,
     ProofreadBatchRequest,
     ProofreadBatchResponse,
     ProofreadBatchResultItem,
     ProofreadRowRequest,
     ProofreadRowResponse,
+    RebuildXmlRequest,
+    RebuildXmlResponse,
     TranslateFileResponse,
     TranslateRequest,
     TranslateResponse,
@@ -77,201 +95,32 @@ def _build_token_batches(
     return batches
 
 
-def _cell_to_str(value) -> str:
-    """Chuyển giá trị ô (Excel/CSV) sang chuỗi."""
-    if value is None:
-        return ""
-    if hasattr(value, "isoformat"):  # datetime.date/datetime
-        return value.isoformat()
-    return str(value).strip()
+# Pending file có placeholder: (row_idx, col, orig_text, text_for_ai, placeholders)
+_FilePendingWithPh = Tuple[int, str, str, str, List[str]]
 
 
-def _json_value_to_str(value) -> str:
-    """Chuyển giá trị từ JSON sang chuỗi: số/chuỗi/None như ô; dict/list serialize thành JSON (khác Excel)."""
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value, ensure_ascii=False).strip()
-        except (TypeError, ValueError):
-            return str(value).strip()
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value).strip() if value is not None else ""
-
-
-async def _parse_excel(content: bytes) -> ParseFileResponse:
-    """Đọc file .xlsx (openpyxl), trả về columns và preview_rows.
-    Bỏ qua cột trống trong header và hàng mà toàn bộ cell đều trống.
-    """
-    try:
-        import openpyxl
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="openpyxl chưa được cài đặt. Vui lòng cài: pip install openpyxl",
-        )
-    workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    sheet = workbook.active
-    if not sheet:
-        return ParseFileResponse(columns=[], preview_rows=[])
-    # Dòng 1 = header
-    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
-    if not header_row:
-        return ParseFileResponse(columns=[], preview_rows=[])
-
-    # Ghi nhận index các cột có tên (bỏ qua cột header trống)
-    raw_columns = [_cell_to_str(h) for h in header_row]
-    valid_col_indices = [i for i, c in enumerate(raw_columns) if c.strip()]
-
-    # Đảm bảo tên cột unique (trùng thì thêm _2, _3...)
-    seen: dict = {}
-    columns: List[str] = []
-    for i in valid_col_indices:
-        c = raw_columns[i]
-        key = c
-        if key in seen:
-            seen[key] += 1
-            c = f"{c}_{seen[key]}"
+def _build_token_batches_file(
+    pending: "List[_FilePendingWithPh]",
+    max_tokens: int = TRANSLATE_BATCH_MAX_INPUT_TOKENS,
+    max_items: int = TRANSLATE_BATCH_SIZE,
+) -> "List[List[_FilePendingWithPh]]":
+    """Gom pending file (đã bóc placeholder) thành batch theo token của text_for_ai."""
+    batches: List[List[_FilePendingWithPh]] = []
+    current: List[_FilePendingWithPh] = []
+    current_tokens = 0
+    for item in pending:
+        text_for_ai = item[3]
+        tok = _estimate_tokens(text_for_ai) + 6
+        if current and (current_tokens + tok > max_tokens or len(current) >= max_items):
+            batches.append(current)
+            current = [item]
+            current_tokens = tok
         else:
-            seen[key] = 1
-        columns.append(c)
-
-    preview_rows = []
-    for row in sheet.iter_rows(min_row=2, max_row=1 + PREVIEW_ROW_LIMIT, values_only=True):
-        row_dict = {
-            col_name: (_cell_to_str(row[orig_i]) if orig_i < len(row) else "")
-            for col_name, orig_i in zip(columns, valid_col_indices)
-        }
-        # Bỏ qua hàng trống (toàn bộ cell đều rỗng)
-        if not any(v.strip() for v in row_dict.values()):
-            continue
-        preview_rows.append(row_dict)
-    workbook.close()
-    return ParseFileResponse(columns=columns, preview_rows=preview_rows)
-
-
-async def _parse_csv(content: bytes) -> ParseFileResponse:
-    """Đọc file CSV (dòng 1 = header), trả về columns và preview_rows."""
-    try:
-        text = content.decode("utf-8-sig").strip()
-    except Exception:
-        text = content.decode("utf-8", errors="replace").strip()
-    lines = text.splitlines()
-    if not lines:
-        return ParseFileResponse(columns=[], preview_rows=[])
-    reader = csv.reader(io.StringIO(text))
-    header = next(reader, None)
-    if not header:
-        return ParseFileResponse(columns=[], preview_rows=[])
-    columns = [h.strip() or "Cột" for h in header]
-    seen = {}
-    unique_columns = []
-    for c in columns:
-        key = c
-        if key in seen:
-            seen[key] = seen.get(key, 1) + 1
-            c = f"{c}_{seen[key]}"
-        else:
-            seen[key] = 1
-        unique_columns.append(c)
-    columns = unique_columns
-    preview_rows = []
-    for _ in range(PREVIEW_ROW_LIMIT):
-        row = next(reader, None)
-        if row is None:
-            break
-        row_dict = {}
-        for i, col_name in enumerate(columns):
-            row_dict[col_name] = (row[i].strip() if i < len(row) else "")
-        preview_rows.append(row_dict)
-    return ParseFileResponse(columns=columns, preview_rows=preview_rows)
-
-
-def _rows_from_json(data) -> Tuple[List[str], List[dict]]:
-    """Từ cấu trúc JSON (list of dict, dict với key chứa mảng object, dict đơn, list of list, ...) trả về columns và rows."""
-    if isinstance(data, dict):
-        # Nếu root là object có key chứa mảng object (vd. {"users": [{...}, {...}]}) thì dùng mảng đó làm dòng
-        for _k, v in data.items():
-            if isinstance(v, list) and len(v) > 0 and all(isinstance(item, dict) for item in v):
-                return _rows_from_json(v)
-        columns = [str(c) or "Cột" for c in data.keys()]
-        if not columns:
-            return ["Nội dung"], []
-        row = {c: _json_value_to_str(data.get(k)) for k, c in zip(list(data.keys()), columns)}
-        return columns, [row]
-    if isinstance(data, list):
-        if len(data) == 0:
-            return ["Nội dung"], []
-        first = data[0]
-        if isinstance(first, dict):
-            all_keys = []
-            for row in data:
-                if isinstance(row, dict):
-                    for k in row:
-                        if k not in all_keys:
-                            all_keys.append(k)
-            columns = [str(k) or "Cột" for k in all_keys]
-            if not columns:
-                columns = ["Nội dung"]
-            seen = {}
-            unique = []
-            for c in columns:
-                key = c
-                if key in seen:
-                    seen[key] += 1
-                    c = f"{c}_{seen[key]}"
-                else:
-                    seen[key] = 1
-                unique.append(c)
-            rows = []
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                row = {}
-                for i, col in enumerate(unique):
-                    orig_key = all_keys[i] if i < len(all_keys) else col
-                    val = item.get(orig_key)
-                    row[col] = _json_value_to_str(val)
-                rows.append(row)
-            return unique, rows
-        if isinstance(first, (list, tuple)):
-            # Mảng 2 chiều: dòng đầu = header
-            columns = [str(v) or f"Cột{i+1}" for i, v in enumerate(first)]
-            if not columns:
-                columns = ["Nội dung"]
-            seen = {}
-            unique = []
-            for c in columns:
-                key = c
-                if key in seen:
-                    seen[key] += 1
-                    c = f"{c}_{seen[key]}"
-                else:
-                    seen[key] = 1
-                unique.append(c)
-            rows = []
-            for item in data[1:]:
-                if not isinstance(item, (list, tuple)):
-                    continue
-                row = {}
-                for i, col in enumerate(unique):
-                    val = item[i] if i < len(item) else None
-                    row[col] = _json_value_to_str(val)
-                rows.append(row)
-            return unique, rows
-        return ["Nội dung"], [{"Nội dung": _json_value_to_str(first)}]
-    return ["Nội dung"], [{"Nội dung": _json_value_to_str(data)}]
-
-
-def _decode_text(content: bytes) -> str:
-    """Thử nhiều encoding để decode bytes thành str."""
-    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
-        try:
-            return content.decode(encoding).strip().lstrip("\ufeff")
-        except Exception:
-            continue
-    return content.decode("utf-8", errors="replace").strip().lstrip("\ufeff")
+            current.append(item)
+            current_tokens += tok
+    if current:
+        batches.append(current)
+    return batches
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,7 +156,7 @@ _RE_HAS_LETTER  = re.compile(r"[a-zA-ZÀ-ỹ\u00C0-\u024F\u1E00-\u1EFF]")
 _RE_NATURAL_START = re.compile(r"^[A-ZÀ-Ỵ\u00C0-\u024F\u1E00-\u1EFF][a-zà-ỹ\u00C0-\u024F\u1E00-\u1EFF]")
 _RE_PUNCTUATION = re.compile(r"[.,!?;:]")
 
-# Nhóm 🔵 Placeholder — tất cả dạng biến: {x}, {{x}}, %s, %d, %1$s, ${x}, <x>, @x@
+# Nhóm 🔵 Placeholder — tất cả dạng biến: {x}, {{x}}, %s, %d, %1$s, ${x}, <x>, @x@, thẻ HTML <br>, <br/>
 _RE_PLACEHOLDER = re.compile(
     r"("
     r"\{\{[^}]+\}\}"           # {{count}}
@@ -316,7 +165,7 @@ _RE_PLACEHOLDER = re.compile(
     r"|%\d*\$?[sdifcq%]"       # %s %d %1$s %02d
     r"|%[sdicfqoxXeEgGp%]"     # C-style printf
     r"|@[A-Za-z_][A-Za-z0-9_]*@"  # @name@
-    r"|<[A-Za-z_][A-Za-z0-9_]*>"  # <var>
+    r"|<[A-Za-z_][A-Za-z0-9_]*\s*/?>"   # <var>, <br>, <br/>, <br />
     r")"
 )
 
@@ -514,253 +363,6 @@ async def _translate_json_recursive(
     return obj
 
 
-def _plain_text_lines_to_rows(text: str) -> Tuple[List[str], List[dict]]:
-    """Khi file .json không phải JSON hợp lệ: coi mỗi dòng là một dòng dữ liệu, cột 'Nội dung'."""
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return ["Nội dung"], [{"Nội dung": line} for line in lines]
-
-
-async def _parse_json(content: bytes) -> ParseFileResponse:
-    """Đọc file JSON (array of objects, object, array of arrays, hoặc array rỗng). Nếu không phải JSON hợp lệ thì đọc theo từng dòng (plain text)."""
-    if not content:
-        return ParseFileResponse(columns=["Nội dung"], preview_rows=[])
-    text = _decode_text(content)
-    if not text:
-        return ParseFileResponse(columns=["Nội dung"], preview_rows=[])
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        columns, all_rows = _plain_text_lines_to_rows(text)
-        preview_rows = all_rows[:PREVIEW_ROW_LIMIT]
-        return ParseFileResponse(columns=columns, preview_rows=preview_rows)
-    columns, all_rows = _rows_from_json(data)
-    if not columns:
-        columns = ["Nội dung"]
-    preview_rows = all_rows[:PREVIEW_ROW_LIMIT]
-    return ParseFileResponse(columns=columns, preview_rows=preview_rows)
-
-
-def _read_full_json(content: bytes, max_rows: int) -> Tuple[List[str], List[dict]]:
-    """Đọc toàn bộ file JSON, trả về columns và rows (tối đa max_rows). Nếu không phải JSON hợp lệ thì đọc theo từng dòng."""
-    if not content:
-        return [], []
-    text = _decode_text(content)
-    if not text:
-        return [], []
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        columns, all_rows = _plain_text_lines_to_rows(text)
-        return columns, all_rows[:max_rows]
-    columns, all_rows = _rows_from_json(data)
-    if not columns:
-        columns = ["Nội dung"]
-    return columns, all_rows[:max_rows]
-
-
-def _xml_local_tag(el: ET.Element) -> str:
-    """Lấy tên thẻ không namespace (phần sau dấu })."""
-    tag = el.tag if hasattr(el, "tag") else ""
-    if isinstance(tag, str) and "}" in tag:
-        return tag.split("}", 1)[1]
-    return tag or "col"
-
-
-def _xml_element_full_text(el: ET.Element) -> str:
-    """Lấy toàn bộ nội dung text của phần tử XML (text + nội dung con lồng nhau + tail). Khác Excel: XML có cấu trúc cây."""
-    if el is None:
-        return ""
-    parts = [el.text or ""]
-    for child in el:
-        parts.append(_xml_element_full_text(child))
-        parts.append(child.tail or "")
-    return "".join(parts).strip()
-
-
-def _rows_from_android_xml(root: ET.Element) -> Tuple[List[str], List[dict]]:
-    """
-    Parser cho Android Resource XML (<resources>).
-    Columns: ["name", "value"]
-    - <string name="X">text</string>               → {name:"X", value:"text"}
-    - <plurals name="X"><item qty="one">t</item>   → {name:"X[one]", value:"t"}
-    - <string-array name="X"><item>t</item>        → {name:"X[0]", value:"t"}
-    Bỏ qua translatable="false". Tự động strip CDATA markers nếu có.
-    """
-    columns = ["name", "value"]
-    rows: List[dict] = []
-    for el in root:
-        tag = _xml_local_tag(el)
-        if el.attrib.get("translatable", "true").lower() == "false":
-            continue
-        el_name = el.attrib.get("name", "")
-        if tag == "string":
-            value = _xml_element_full_text(el).strip()
-            rows.append({"name": el_name, "value": value})
-        elif tag == "plurals":
-            for item in el:
-                qty = item.attrib.get("quantity", "")
-                value = _xml_element_full_text(item).strip()
-                rows.append({"name": f"{el_name}[{qty}]", "value": value})
-        elif tag == "string-array":
-            for idx, item in enumerate(el):
-                value = _xml_element_full_text(item).strip()
-                rows.append({"name": f"{el_name}[{idx}]", "value": value})
-        elif tag in ("integer", "bool", "color", "dimen"):
-            # Giá trị kỹ thuật — bỏ qua, không dịch
-            continue
-        else:
-            # Tag không xác định nhưng có text
-            value = _xml_element_full_text(el).strip()
-            if value:
-                rows.append({"name": el_name or tag, "value": value})
-    return columns, rows
-
-
-def _rows_from_xliff(root: ET.Element) -> Tuple[List[str], List[dict]]:
-    """
-    Parser cho XLIFF 1.2/2.0 (<xliff>, <file>).
-    Columns: ["id", "source", "target"]
-    """
-    columns = ["id", "source", "target"]
-    rows: List[dict] = []
-
-    def _collect_units(node: ET.Element) -> None:
-        tag = _xml_local_tag(node)
-        if tag in ("trans-unit", "unit"):
-            uid = node.attrib.get("id", "")
-            src_el = node.find(".//{*}source") or node.find("source")
-            tgt_el = node.find(".//{*}target") or node.find("target")
-            src = _xml_element_full_text(src_el).strip() if src_el is not None else ""
-            tgt = _xml_element_full_text(tgt_el).strip() if tgt_el is not None else ""
-            if src or tgt:
-                rows.append({"id": uid, "source": src, "target": tgt})
-        for child in node:
-            _collect_units(child)
-
-    _collect_units(root)
-    return columns, rows
-
-
-def _rows_from_xml(root: ET.Element) -> Tuple[List[str], List[dict]]:
-    """
-    Dispatcher: nhận diện định dạng XML rồi chọn parser phù hợp.
-    - Android Resources (<resources>)  → _rows_from_android_xml
-    - XLIFF (<xliff>/<file>)           → _rows_from_xliff
-    - Generic repeating-container XML  → logic cũ
-    """
-    root_tag = _xml_local_tag(root)
-
-    # ── Android Resource XML ──────────────────────────────────────────────────
-    if root_tag == "resources":
-        return _rows_from_android_xml(root)
-
-    # ── XLIFF ─────────────────────────────────────────────────────────────────
-    if root_tag in ("xliff", "file") or root.find(".//{*}trans-unit") is not None or root.find(".//{*}unit") is not None:
-        return _rows_from_xliff(root)
-
-    # ── Generic: tìm container có phần tử con lặp lại ────────────────────────
-    children = list(root)
-    if not children:
-        text = _xml_element_full_text(root)
-        return (["Nội dung"], [{"Nội dung": text}]) if text else (["Nội dung"], [])
-
-    row_container = None
-    for el in children:
-        sub = list(el)
-        if len(sub) > 1 and (row_container is None or len(sub) > len(list(row_container))):
-            row_container = el
-
-    if row_container is not None:
-        row_elements = list(row_container)
-        if row_elements:
-            first_row = row_elements[0]
-            attr_names = list(first_row.attrib.keys())
-            child_tags: List[str] = []
-            for ch in first_row:
-                name = _xml_local_tag(ch)
-                if name not in child_tags:
-                    child_tags.append(name)
-            cols_raw = attr_names + child_tags or ["Nội dung"]
-            seen: dict = {}
-            unique: List[str] = []
-            for c in cols_raw:
-                if c in seen:
-                    seen[c] += 1
-                    unique.append(f"{c}_{seen[c]}")
-                else:
-                    seen[c] = 1
-                    unique.append(c)
-            rows = []
-            for el in row_elements:
-                row_dict: dict = {}
-                for i, col in enumerate(unique):
-                    if i < len(attr_names):
-                        row_dict[col] = (el.attrib.get(attr_names[i], "") or "").strip()
-                    else:
-                        tag_idx = i - len(attr_names)
-                        tag_name = child_tags[tag_idx] if tag_idx < len(child_tags) else col
-                        child_el = next((e for e in el if _xml_local_tag(e) == tag_name), None)
-                        row_dict[col] = _xml_element_full_text(child_el) if child_el is not None else ""
-                rows.append(row_dict)
-            return unique, rows
-
-    # Fallback: direct children là rows
-    first = children[0]
-    sub = list(first)
-    if not sub:
-        # Mỗi thẻ con = 1 row với cột là tag name, giá trị là text
-        all_tags = sorted({_xml_local_tag(e) for e in children})
-        if len(all_tags) == 1:
-            cols = [all_tags[0]]
-            return cols, [{all_tags[0]: _xml_element_full_text(e)} for e in children]
-        # Nhiều tag khác nhau → dùng cặp key/value
-        return ["tag", "value"], [{"tag": _xml_local_tag(e), "value": _xml_element_full_text(e)} for e in children]
-
-    cols_set: List[str] = []
-    for c in sub:
-        nm = _xml_local_tag(c)
-        if nm not in cols_set:
-            cols_set.append(nm)
-    seen2: dict = {}
-    unique2: List[str] = []
-    for c in cols_set:
-        if c in seen2:
-            seen2[c] += 1
-            unique2.append(f"{c}_{seen2[c]}")
-        else:
-            seen2[c] = 1
-            unique2.append(c)
-    rows2 = []
-    for el in children:
-        row: dict = {}
-        for i, col in enumerate(unique2):
-            orig = cols_set[i] if i < len(cols_set) else col
-            child_el = next((e for e in el if _xml_local_tag(e) == orig), None) or el.find(orig)
-            row[col] = _xml_element_full_text(child_el) if child_el is not None else ""
-        rows2.append(row)
-    return unique2, rows2
-
-
-def _strip_xml_declaration(text: str) -> str:
-    """Bỏ dòng khai báo <?xml ...?> để tránh lỗi parse do encoding."""
-    stripped = text.strip().lstrip("\ufeff")
-    if stripped.startswith("<?xml"):
-        idx = stripped.find("?>")
-        if idx != -1:
-            stripped = stripped[idx + 2 :].strip()
-    return stripped
-
-
-def _split_xml_declaration(text: str) -> Tuple[str, str]:
-    """Trả về (declaration_line, rest). Declaration có thể rỗng."""
-    stripped = text.strip().lstrip("\ufeff")
-    if stripped.startswith("<?xml"):
-        idx = stripped.find("?>")
-        if idx != -1:
-            return stripped[: idx + 2].strip(), stripped[idx + 2 :].strip()
-    return "", stripped
-
-
 # --- Dịch XML giữ cấu trúc: chỉ text trong thẻ, không dịch attribute/tên thẻ, giữ placeholder ---
 XML_UI_TAGS = frozenset({"string", "text", "description", "title", "message", "label", "subtitle", "content"})
 
@@ -781,8 +383,85 @@ def _is_xml_translatable(el: ET.Element, respect_translatable: bool, force: bool
             return True
     if force:
         return True
-    tag = _xml_local_tag(el)
+    tag = xml_local_tag_fn(el)
     return tag.lower() in XML_UI_TAGS
+
+
+# Ref để gán lại kết quả dịch XML: (element, 'text'|'tail')
+_XmlRef = Tuple[ET.Element, str]
+
+
+def _collect_xml_segments(
+    el: ET.Element,
+    preserve_placeholders: bool,
+    respect_translatable: bool,
+    smart_filter: bool,
+    _force_children: bool = False,
+) -> "List[Tuple[_XmlRef, str, List[str]]]":
+    """
+    Thu thập tất cả đoạn text cần dịch trong cây XML.
+    Trả về list (ref, text_đã_bóc_placeholder, placeholders) để gom batch.
+    """
+    out: List[Tuple[_XmlRef, str, List[str]]] = []
+    if el is None:
+        return out
+    translatable = _is_xml_translatable(el, respect_translatable, force=_force_children)
+
+    def add(t: str, ref: _XmlRef) -> None:
+        if not t or not t.strip():
+            return
+        orig = t
+        if preserve_placeholders:
+            t, phs = _extract_placeholders(t)
+        else:
+            phs = []
+        if not _should_translate_string(t, smart_filter):
+            return
+        out.append((ref, t.strip(), phs))
+
+    if translatable and el.text and el.text.strip():
+        add(el.text, (el, "text"))
+
+    current_tag = xml_local_tag_fn(el).lower()
+    force_for_children = current_tag in ANDROID_ITEM_PARENTS
+
+    for child in el:
+        out.extend(
+            _collect_xml_segments(
+                child,
+                preserve_placeholders=preserve_placeholders,
+                respect_translatable=respect_translatable,
+                smart_filter=smart_filter,
+                _force_children=force_for_children,
+            )
+        )
+        if translatable and child.tail and child.tail.strip():
+            add(child.tail, (child, "tail"))
+    return out
+
+
+def _build_xml_batches(
+    pending: "List[Tuple[_XmlRef, str, List[str]]]",
+    max_tokens: int = TRANSLATE_BATCH_MAX_INPUT_TOKENS,
+    max_items: int = TRANSLATE_BATCH_SIZE,
+) -> "List[List[Tuple[_XmlRef, str, List[str]]]]":
+    """Gom danh sách (ref, text, placeholders) thành các batch theo token."""
+    batches: List[List[Tuple[_XmlRef, str, List[str]]]] = []
+    current: List[Tuple[_XmlRef, str, List[str]]] = []
+    current_tokens = 0
+    for item in pending:
+        ref, text, phs = item
+        tok = _estimate_tokens(text) + 6
+        if current and (current_tokens + tok > max_tokens or len(current) >= max_items):
+            batches.append(current)
+            current = [item]
+            current_tokens = tok
+        else:
+            current.append(item)
+            current_tokens += tok
+    if current:
+        batches.append(current)
+    return batches
 
 
 async def _translate_xml_recursive(
@@ -805,578 +484,85 @@ async def _translate_xml_recursive(
     Giữ placeholder {x}, %d, %s, {{count}}. Chỉ dịch thẻ UI hoặc translatable=\"true\".
     _force_children=True khi parent là Android container (plurals, string-array) — buộc dịch <item>.
     Sửa tại chỗ (in-place).
+    GOM BATCH: thu thập segment → tra cache/glossary → gọi AI theo batch → gán lại.
     """
     if el is None:
         return
-    translatable = _is_xml_translatable(el, respect_translatable, force=_force_children)
-
-    async def do_translate(t: str) -> str:
-        if not t or not t.strip():
-            return t
-        orig = t
-        if preserve_placeholders:
-            t, phs = _extract_placeholders(t)
-        else:
-            phs = []
-        if not _should_translate_string(t, smart_filter):
-            return orig
-        try:
-            out = await translate_with_priority(
-                db, text=t.strip(), source_lang=source_lang, target_lang=target_lang,
-                prompt_id=prompt_id, context=context, style=style,
-                game_id=game_id, game_category_id=game_category_id,
-            ) or t.strip()
-            if preserve_placeholders and phs:
-                out = _restore_placeholders(out, phs)
-            return out
-        except Exception as e:
-            logger.warning("Translate XML text: %s", e)
-            return orig
-
-    if translatable and el.text and el.text.strip():
-        el.text = await do_translate(el.text)
-
-    # Nếu thẻ hiện tại là Android container, children (<item>) phải được force-translate
-    current_tag = _xml_local_tag(el).lower()
-    force_for_children = current_tag in ANDROID_ITEM_PARENTS
-
-    for child in el:
-        await _translate_xml_recursive(
-            child, db, source_lang, target_lang,
-            prompt_id, context, style,
-            preserve_placeholders, respect_translatable, smart_filter,
-            _force_children=force_for_children,
-            game_id=game_id, game_category_id=game_category_id,
-        )
-        if translatable and child.tail and child.tail.strip():
-            child.tail = await do_translate(child.tail)
-
-
-def _xml_to_string(root: ET.Element, declaration: str = "") -> str:
-    """Serialize element tree thành chuỗi XML. Nếu declaration có giá trị thì ghi lên trước."""
-    buf = io.BytesIO()
-    if declaration:
-        buf.write(declaration.strip().encode("utf-8"))
-        buf.write(b"\n")
-    ET.ElementTree(root).write(buf, encoding="utf-8", xml_declaration=False, default_namespace="", method="xml")
-    return buf.getvalue().decode("utf-8")
-
-
-async def _parse_xml(content: bytes) -> ParseFileResponse:
-    """Đọc file XML. Không trả 400 khi lỗi parse, trả dữ liệu mặc định."""
-    if not content:
-        return ParseFileResponse(columns=["Nội dung"], preview_rows=[])
-    text = _decode_text(content)
-    if not text:
-        return ParseFileResponse(columns=["Nội dung"], preview_rows=[])
-    text = _strip_xml_declaration(text)
-    if not text:
-        return ParseFileResponse(columns=["Nội dung"], preview_rows=[])
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
-        return ParseFileResponse(columns=["Nội dung"], preview_rows=[])
-    columns, all_rows = _rows_from_xml(root)
-    if not columns:
-        columns = ["Nội dung"]
-    preview_rows = all_rows[:PREVIEW_ROW_LIMIT]
-    return ParseFileResponse(columns=columns, preview_rows=preview_rows)
-
-
-def _read_full_xml(content: bytes, max_rows: int) -> Tuple[List[str], List[dict]]:
-    """Đọc toàn bộ file XML, trả về columns và rows (tối đa max_rows)."""
-    if not content:
-        return [], []
-    text = _decode_text(content)
-    if not text:
-        return [], []
-    text = _strip_xml_declaration(text)
-    if not text:
-        return [], []
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
-        return [], []
-    columns, all_rows = _rows_from_xml(root)
-    if not columns:
-        columns = ["Nội dung"]
-    return columns, all_rows[:max_rows]
-
-
-def _iter_docx_body_items(doc: Any):
-    """Yield Paragraph hoặc Table objects theo đúng thứ tự xuất hiện trong document body.
-    Khác doc.paragraphs (chỉ trả paragraph ngoài table) và doc.tables (chỉ trả table).
-    """
-    try:
-        from docx.text.paragraph import Paragraph as _Para
-        from docx.table import Table as _Tbl
-    except ImportError:
-        return
-    for child in doc.element.body.iterchildren():
-        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-        if tag == "p":
-            yield _Para(child, doc)
-        elif tag == "tbl":
-            yield _Tbl(child, doc)
-
-
-
-def _collect_docx_blocks(doc: Any, max_items: int = 100_000) -> List[Tuple[str, str, Any]]:
-    """Thu thập tất cả text blocks theo thứ tự document: paragraph + table cells.
-
-    Returns list of (text, kind, ref):
-        kind = 'para'  → ref là Paragraph object
-        kind = 'cell'  → ref là Cell object
-    Bỏ qua paragraph/cell rỗng. Bỏ qua cell trùng do merged cells.
-    """
-    try:
-        from docx.text.paragraph import Paragraph as _Para
-        from docx.table import Table as _Tbl
-    except ImportError:
-        return []
-    blocks: List[Tuple[str, str, Any]] = []
-    for item in _iter_docx_body_items(doc):
-        if len(blocks) >= max_items:
-            break
-        if isinstance(item, _Para):
-            text = (item.text or "").strip()
-            if text:
-                blocks.append((text, "para", item))
-        elif isinstance(item, _Tbl):
-            seen: set = set()
-            for row in item.rows:
-                for cell in row.cells:
-                    cid = id(cell._tc)
-                    if cid in seen:
-                        continue
-                    seen.add(cid)
-                    text = (cell.text or "").strip()
-                    if text:
-                        blocks.append((text, "cell", cell))
-    return blocks
-
-
-def _para_to_html(para: Any) -> str:
-    """Chuyển 1 paragraph python-docx thành HTML, giữ heading/bold/italic/list/underline."""
-    import html as _html_mod
-
-    style_name: str = (para.style.name or "") if para.style else ""
-    # Build inner HTML từ runs
-    inner = ""
-    for run in para.runs:
-        text = run.text or ""
-        if not text:
-            continue
-        text = _html_mod.escape(text)
-        if run.bold and run.italic:
-            text = f"<strong><em>{text}</em></strong>"
-        elif run.bold:
-            text = f"<strong>{text}</strong>"
-        elif run.italic:
-            text = f"<em>{text}</em>"
-        if getattr(run, "underline", False):
-            text = f"<u>{text}</u>"
-        inner += text
-
-    if not inner.strip():
-        return ""
-
-    sn_lower = style_name.lower()
-    if "heading 1" in sn_lower:
-        return f"<h1>{inner}</h1>"
-    if "heading 2" in sn_lower:
-        return f"<h2>{inner}</h2>"
-    if "heading 3" in sn_lower or "heading 4" in sn_lower:
-        return f"<h3>{inner}</h3>"
-    if "list" in sn_lower or sn_lower.startswith("list"):
-        return f"<li>{inner}</li>"
-    return f"<p>{inner}</p>"
-
-
-def _table_to_html(table: Any) -> str:
-    """Chuyển 1 python-docx Table thành HTML <table> với border."""
-    import html as _html_mod
-    rows_html = ""
-    for row_idx, row in enumerate(table.rows):
-        seen: set = set()
-        cells_html = ""
-        for cell in row.cells:
-            cid = id(cell._tc)
-            if cid in seen:
-                continue
-            seen.add(cid)
-            # Lấy inner HTML của các paragraph trong cell (giữ bold/italic)
-            cell_inner = ""
-            for p in cell.paragraphs:
-                ph = _para_to_html(p)
-                if ph:
-                    # Bỏ tag bọc ngoài (<p>...</p>, <h1>...</h1>...), chỉ lấy nội dung
-                    import re as _re
-                    m = _re.match(r"^<[^>]+>(.*)</[^>]+>$", ph, _re.DOTALL)
-                    cell_inner += (m.group(1) if m else _html_mod.escape(cell.text)) + " "
-            cell_inner = cell_inner.strip() or _html_mod.escape(cell.text or "")
-            tag = "th" if row_idx == 0 else "td"
-            cells_html += f"<{tag} style='border:1px solid #d1d5db;padding:6px 10px;text-align:left'>{cell_inner}</{tag}>"
-        rows_html += f"<tr>{cells_html}</tr>"
-    return (
-        "<div style='overflow-x:auto;margin:8px 0'>"
-        "<table style='border-collapse:collapse;width:100%;font-size:13px'>"
-        f"{rows_html}"
-        "</table></div>"
+    segments = _collect_xml_segments(
+        el,
+        preserve_placeholders=preserve_placeholders,
+        respect_translatable=respect_translatable,
+        smart_filter=smart_filter,
+        _force_children=_force_children,
     )
-
-
-def _docx_to_preview_html(doc: Any, max_items: int = 120) -> str:
-    """Chuyển toàn bộ document (paragraphs + tables) thành HTML theo thứ tự body.
-    Paragraphs → giữ heading/bold/italic/list. Tables → <table> với border.
-    """
-    try:
-        from docx.text.paragraph import Paragraph as _Para
-        from docx.table import Table as _Tbl
-    except ImportError:
-        # Fallback: chỉ lấy paragraphs
-        parts = []
-        for p in list(doc.paragraphs)[:max_items]:
-            h = _para_to_html(p)
-            if h:
-                parts.append(h)
-        return "".join(parts)
-
-    parts: list = []
-    count = 0
-    for item in _iter_docx_body_items(doc):
-        if count >= max_items:
-            break
-        if isinstance(item, _Para):
-            h = _para_to_html(item)
-            if h:
-                parts.append(h)
-                count += 1
-        elif isinstance(item, _Tbl):
-            parts.append(_table_to_html(item))
-            count += 1
-
-    # Gom các <li> liên tiếp vào <ul>
-    result = ""
-    i = 0
-    while i < len(parts):
-        if parts[i].startswith("<li>"):
-            result += "<ul>"
-            while i < len(parts) and parts[i].startswith("<li>"):
-                result += parts[i]
-                i += 1
-            result += "</ul>"
-        else:
-            result += parts[i]
-            i += 1
-    return result
-
-
-async def _parse_docx(content: bytes) -> ParseFileResponse:
-    """Đọc file .docx, trả về columns và preview_rows.
-    Luôn thu thập tất cả nội dung (paragraphs + table cells) theo thứ tự document.
-    """
-    try:
-        from docx import Document
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="Hỗ trợ DOCX cần cài thư viện: pip install python-docx (sau đó khởi động lại backend).",
-        )
-    if not content or len(content) < 4:
-        raise HTTPException(status_code=400, detail="File DOCX rỗng hoặc không đúng định dạng.")
-    try:
-        doc = Document(io.BytesIO(content))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Không đọc được file DOCX (file có thể hỏng hoặc không phải .docx): {str(e)[:200]}")
-
-    blocks = _collect_docx_blocks(doc, max_items=PREVIEW_ROW_LIMIT)
-    columns = ["Nội dung"]
-    preview_rows = [{"Nội dung": text} for text, _kind, _ref in blocks]
-    preview_html = _docx_to_preview_html(doc)
-    return ParseFileResponse(columns=columns, preview_rows=preview_rows, preview_html=preview_html)
-
-
-def _read_full_docx(content: bytes, max_rows: int) -> Tuple[List[str], List[dict]]:
-    """Đọc toàn bộ file .docx, trả về columns và rows (tối đa max_rows).
-    Luôn thu thập tất cả nội dung (paragraphs + table cells) theo thứ tự document.
-    """
-    try:
-        from docx import Document
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="Hỗ trợ DOCX cần cài: pip install python-docx và khởi động lại backend.",
-        )
-    if not content or len(content) < 4:
-        return [], []
-    try:
-        doc = Document(io.BytesIO(content))
-    except Exception:
-        return [], []
-
-    blocks = _collect_docx_blocks(doc, max_items=max_rows)
-    rows = [{"Nội dung": text} for text, _kind, _ref in blocks]
-    return ["Nội dung"], rows
-
-
-def _replace_para_text_keep_fmt(para: Any, new_text: str) -> None:
-    """Thay text của paragraph mà vẫn giữ nguyên toàn bộ formatting (bold/italic/underline/font/size/color...).
-
-    Chiến lược:
-    - 1 run → cập nhật w:t trực tiếp, giữ nguyên rPr.
-    - Nhiều runs, cùng format → gom vào run[0], xóa text các run còn lại.
-    - Nhiều runs, format khác nhau → phân phối text dịch thông minh:
-        1. Thử tìm text gốc của từng run trong text dịch (verbatim, case-insensitive)
-           để giữ đúng vị trí bold/italic.
-        2. Nếu không tìm được → phân phối tỉ lệ theo độ dài gốc, giữ ranh giới từ.
-    """
-    try:
-        from docx.oxml.ns import qn
-        from lxml import etree
-    except ImportError:
-        para.text = new_text
+    if not segments:
         return
 
-    XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+    # Dedupe: tra Cache + Glossary (thứ tự ưu tiên) mỗi text chỉ 1 lần
+    cache_by_text: Dict[str, Optional[str]] = {}
+    for ref, text, phs in segments:
+        if text not in cache_by_text:
+            cache_by_text[text] = None
+    for text in cache_by_text:
+        try:
+            hit = await translate_check_only(
+                db, text, source_lang, target_lang,
+                game_id=game_id, game_category_id=game_category_id,
+            )
+            cache_by_text[text] = hit
+        except Exception as e:
+            logger.warning("XML translate_check_only text=%s: %s", text[:40], e)
+            cache_by_text[text] = None
 
-    def _set_run_text(r: Any, txt: str) -> None:
-        t = r._r.find(qn("w:t"))
-        if t is None:
-            t = etree.SubElement(r._r, qn("w:t"))
-        t.text = txt
-        t.set(XML_SPACE, "preserve")
-
-    def _fmt_key(r: Any) -> str:
-        rpr = r._r.find(qn("w:rPr"))
-        return etree.tostring(rpr, encoding="unicode") if rpr is not None else ""
-
-    runs = para.runs
-    if not runs:
-        para.add_run(new_text)
-        return
-
-    if len(runs) == 1:
-        _set_run_text(runs[0], new_text)
-        return
-
-    # Kiểm tra tất cả runs có cùng format không
-    fmt_keys = [_fmt_key(r) for r in runs]
-    if len(set(fmt_keys)) == 1:
-        # Tất cả cùng format → gom vào run[0], clear các run còn lại
-        _set_run_text(runs[0], new_text)
-        for run in runs[1:]:
-            _set_run_text(run, "")
-        return
-
-    # ── Mixed formatting ──────────────────────────────────────────────────────
-    # Bước 1: thử tìm text gốc của mỗi run trong text dịch (verbatim)
-    orig_texts = [r.text or "" for r in runs]
-    distributed: list[str] = [""] * len(runs)
-    remaining = new_text
-
-    matched_any = False
-    for i, orig in enumerate(orig_texts):
-        stripped = orig.strip()
-        if not stripped:
-            continue
-        idx = remaining.lower().find(stripped.lower())
-        if idx != -1:
-            # Text trước match → thuộc run trước (nếu run i > 0 và run trước chưa có)
-            if i > 0 and not distributed[i - 1] and idx > 0:
-                distributed[i - 1] = remaining[:idx].rstrip()
-            distributed[i] = remaining[idx: idx + len(stripped)]
-            remaining = remaining[idx + len(stripped):].lstrip()
-            matched_any = True
-
-    if matched_any:
-        # Phần còn lại của text dịch (sau tất cả các match) → gán vào run cuối có text
-        if remaining:
-            for i in range(len(runs) - 1, -1, -1):
-                if distributed[i]:
-                    distributed[i] = distributed[i] + " " + remaining.lstrip()
-                    break
+    pending: List[Tuple[_XmlRef, str, List[str]]] = []
+    for ref, text, phs in segments:
+        hit = cache_by_text.get(text)
+        if hit is not None:
+            if preserve_placeholders and phs:
+                hit = _restore_placeholders(hit, phs)
+            elem, kind = ref
+            if kind == "text":
+                elem.text = hit
             else:
-                distributed[-1] = remaining
-        for i, run in enumerate(runs):
-            _set_run_text(run, distributed[i])
+                elem.tail = hit
+        else:
+            pending.append((ref, text, phs))
+
+    if not pending:
         return
 
-    # Bước 2 (fallback): phân phối tỉ lệ theo độ dài gốc, giữ ranh giới từ
-    orig_total = sum(len(t) for t in orig_texts) or 1
-    new_total = len(new_text)
-    words = new_text.split()
-    word_idx = 0
-    for i, run in enumerate(runs):
-        if i == len(runs) - 1:
-            chunk = " ".join(words[word_idx:])
-        else:
-            ratio = len(orig_texts[i]) / orig_total
-            target_len = max(1, round(new_total * ratio))
-            chunk_words: list[str] = []
-            chunk_len = 0
-            while word_idx < len(words):
-                w = words[word_idx]
-                candidate = chunk_len + len(w) + (1 if chunk_words else 0)
-                if candidate > target_len and chunk_words:
-                    break
-                chunk_words.append(w)
-                chunk_len = candidate
-                word_idx += 1
-            chunk = " ".join(chunk_words)
-        _set_run_text(run, chunk)
-
-
-def _replace_cell_text_keep_fmt(cell: Any, new_text: str) -> None:
-    """Thay text của table cell mà vẫn giữ formatting.
-    Thao tác trên paragraph đầu tiên của cell; xóa các paragraph thừa.
-    """
-    try:
-        from docx.oxml.ns import qn
-    except ImportError:
-        cell.text = new_text
-        return
-
-    paras = cell.paragraphs
-    if not paras:
-        cell.text = new_text
-        return
-
-    _replace_para_text_keep_fmt(paras[0], new_text)
-
-    # Xóa bỏ các paragraph thừa (nếu cell gốc có nhiều paragraph)
-    tc = cell._tc
-    all_p = tc.findall(qn("w:p"))
-    for extra_p in all_p[1:]:
-        tc.remove(extra_p)
-
-
-def _build_translated_docx(
-    content: bytes,
-    columns: List[str],
-    rows: List[dict],
-    to_translate: List[str],
-) -> bytes:
-    """Tạo lại file DOCX giữ nguyên cấu trúc và formatting.
-    Luôn re-collect blocks theo thứ tự document (paragraphs + table cells)
-    và áp dụng translation lên từng block tương ứng.
-    """
-    try:
-        from docx import Document
-    except ImportError:
-        return content
-    if not content or len(content) < 4:
-        return content
-    try:
-        doc = Document(io.BytesIO(content))
-    except Exception:
-        return content
-
-    blocks = _collect_docx_blocks(doc, max_items=len(rows))
-    for i, row_data in enumerate(rows):
-        if i >= len(blocks):
-            break
-        val = row_data.get("Nội dung_translated")
-        if val is None:
-            continue
-        val = val.strip()
-        _text, kind, ref = blocks[i]
-        if kind == "para":
-            _replace_para_text_keep_fmt(ref, val)
-        else:  # kind == "cell"
-            _replace_cell_text_keep_fmt(ref, val)
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
-
-
-def _read_full_excel(content: bytes, max_rows: int) -> Tuple[List[str], List[dict]]:
-    """Đọc toàn bộ file .xlsx (openpyxl), trả về columns và toàn bộ rows (tối đa max_rows dòng dữ liệu).
-    Bỏ qua cột trống trong header và hàng mà toàn bộ cell đều trống.
-    """
-    try:
-        import openpyxl
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="openpyxl chưa được cài đặt. Vui lòng cài: pip install openpyxl",
-        )
-    workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    sheet = workbook.active
-    if not sheet:
-        return [], []
-    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
-    if not header_row:
-        workbook.close()
-        return [], []
-
-    # Ghi nhận index các cột có tên (bỏ qua cột header trống)
-    raw_columns = [_cell_to_str(h) for h in header_row]
-    valid_col_indices = [i for i, c in enumerate(raw_columns) if c.strip()]
-
-    seen: dict = {}
-    columns: List[str] = []
-    for i in valid_col_indices:
-        c = raw_columns[i]
-        key = c
-        if key in seen:
-            seen[key] += 1
-            c = f"{c}_{seen[key]}"
-        else:
-            seen[key] = 1
-        columns.append(c)
-
-    rows = []
-    counted = 0
-    for row in sheet.iter_rows(min_row=2, values_only=True):
-        if counted >= max_rows:
-            break
-        row_dict = {
-            col_name: (_cell_to_str(row[orig_i]) if orig_i < len(row) else "")
-            for col_name, orig_i in zip(columns, valid_col_indices)
-        }
-        # Bỏ qua hàng trống (toàn bộ cell đều rỗng)
-        if not any(v.strip() for v in row_dict.values()):
-            continue
-        rows.append(row_dict)
-        counted += 1
-    workbook.close()
-    return columns, rows
-
-
-def _read_full_csv(content: bytes, max_rows: int) -> Tuple[List[str], List[dict]]:
-    """Đọc toàn bộ file CSV, trả về columns và toàn bộ rows (tối đa max_rows dòng dữ liệu)."""
-    try:
-        text = content.decode("utf-8-sig").strip()
-    except Exception:
-        text = content.decode("utf-8", errors="replace").strip()
-    reader = csv.reader(io.StringIO(text))
-    header = next(reader, None)
-    if not header:
-        return [], []
-    columns = [h.strip() or "Cột" for h in header]
-    seen = {}
-    unique_columns = []
-    for c in columns:
-        key = c
-        if key in seen:
-            seen[key] = seen.get(key, 1) + 1
-            c = f"{c}_{seen[key]}"
-        else:
-            seen[key] = 1
-        unique_columns.append(c)
-    columns = unique_columns
-    rows = []
-    for _ in range(max_rows):
-        row = next(reader, None)
-        if row is None:
-            break
-        row_dict = {}
-        for i, col_name in enumerate(columns):
-            row_dict[col_name] = (row[i].strip() if i < len(row) else "")
-        rows.append(row_dict)
-    return columns, rows
+    batches = _build_xml_batches(pending)
+    for batch in batches:
+        texts_to_translate = [t for _, t, _ in batch]
+        try:
+            results = await translate_with_ai_batch(
+                db,
+                texts=texts_to_translate,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                prompt_id=prompt_id,
+                context=context,
+                style=style,
+                game_id=game_id,
+                game_category_id=game_category_id,
+            )
+        except Exception as e:
+            logger.warning("translate_xml batch: %s", e)
+            results = texts_to_translate
+        for (ref, orig_text, phs), translated in zip(batch, results):
+            if not translated:
+                translated = orig_text
+            if preserve_placeholders and phs:
+                translated = _restore_placeholders(translated, phs)
+            if translated != orig_text and translated.strip():
+                await save_translation_to_cache(
+                    db, orig_text, translated, source_lang, target_lang, origin="file"
+                )
+            elem, kind = ref
+            if kind == "text":
+                elem.text = translated
+            else:
+                elem.tail = translated
 
 
 @router.post("/parse-file", response_model=ParseFileResponse)
@@ -1392,88 +578,19 @@ async def parse_file(file: UploadFile = File(...)):
     if not content:
         raise HTTPException(status_code=400, detail="File rỗng.")
     if name.endswith(".xlsx"):
-        return await _parse_excel(content)
+        return await excel_handler.parse_excel(content, preview_limit=PREVIEW_ROW_LIMIT)
     if name.endswith(".csv"):
-        return await _parse_csv(content)
+        return await csv_handler.parse_csv(content, preview_limit=PREVIEW_ROW_LIMIT)
     if name.endswith(".json"):
-        return await _parse_json(content)
+        return await json_handler.parse_json(content, preview_limit=PREVIEW_ROW_LIMIT)
     if name.endswith(".xml"):
-        return await _parse_xml(content)
+        return await parse_xml_handler(content, preview_limit=PREVIEW_ROW_LIMIT)
     if name.endswith(".docx"):
-        return await _parse_docx(content)
+        return await word_handler.parse_docx(content, preview_limit=PREVIEW_ROW_LIMIT)
     raise HTTPException(
         status_code=400,
         detail="Chỉ hỗ trợ file .xlsx, .csv, .json, .xml, .docx.",
     )
-
-
-def _reconstruct_translated_json(
-    content: bytes,
-    rows: List[dict],
-    to_translate: List[str],
-) -> Optional[Dict[str, Any]]:
-    """
-    Tái tạo JSON gốc với các trường đã dịch, giữ nguyên cấu trúc nested.
-
-    Xử lý 3 case:
-      A. Root là list of objects      → ["users": [{"name": "..."}]]  → cập nhật từng item
-      B. Root là dict chứa list       → {"users": [...]}               → tìm list, cập nhật
-      C. Root là dict thuần (flat)    → {"title": "...", "ttl": 86400} → cập nhật key trực tiếp
-         Nếu value là dict/list đã bị stringify → parse lại trước khi gán
-
-    Khi value gốc là dict/list nhưng translated là JSON string → parse lại để giữ nested.
-    """
-    def _try_parse_json_value(translated_str: str, original_value: Any) -> Any:
-        """Parse translated string về object nếu value gốc là dict/list."""
-        if not isinstance(original_value, (dict, list)):
-            return translated_str
-        if not translated_str or not isinstance(translated_str, str):
-            return original_value
-        t = translated_str.strip()
-        if not (t.startswith("{") or t.startswith("[")):
-            return translated_str
-        try:
-            return json.loads(t)
-        except (json.JSONDecodeError, ValueError):
-            return translated_str
-
-    def _merge_translated_row(target: dict, row: dict) -> None:
-        """Gán giá trị đã dịch từ row vào target dict, parse JSON string nếu cần."""
-        for col in to_translate:
-            if col not in target:
-                continue
-            translated_val = row.get(col + "_translated")
-            if translated_val is None:
-                continue
-            target[col] = _try_parse_json_value(translated_val, target[col])
-
-    try:
-        raw_text = _decode_text(content)
-        data: Any = json.loads(raw_text)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-
-    # ── Case A: root là list of objects ────────────────────────────────────
-    if isinstance(data, list) and len(data) > 0 and all(isinstance(x, dict) for x in data):
-        for i in range(min(len(data), len(rows))):
-            _merge_translated_row(data[i], rows[i])
-        return data
-
-    # ── Case B & C: root là dict ────────────────────────────────────────────
-    if not isinstance(data, dict):
-        return None
-
-    # Case B: tìm key chứa list of objects
-    for _k, v in data.items():
-        if isinstance(v, list) and len(v) > 0 and all(isinstance(x, dict) for x in v):
-            for i in range(min(len(v), len(rows))):
-                _merge_translated_row(v[i], rows[i])
-            return data
-
-    # Case C: root dict thuần — các column là key của root, 1 row duy nhất
-    if rows:
-        _merge_translated_row(data, rows[0])
-    return data
 
 
 @router.post("/translate-file", response_model=TranslateFileResponse)
@@ -1540,15 +657,15 @@ async def translate_file(
     style = (style or "").strip() or None
 
     if name.endswith(".xlsx"):
-        columns, rows = _read_full_excel(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = excel_handler.read_full_excel(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".csv"):
-        columns, rows = _read_full_csv(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = csv_handler.read_full_csv(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".json"):
-        columns, rows = _read_full_json(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = json_handler.read_full_json(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".xml"):
-        columns, rows = _read_full_xml(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = read_full_xml_handler(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".docx"):
-        columns, rows = _read_full_docx(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = word_handler.read_full_docx(content, TRANSLATE_FILE_MAX_ROWS)
     else:
         columns, rows = [], []
 
@@ -1558,36 +675,47 @@ async def translate_file(
         fallback_cols = list(selected_set) if selected_set else (columns or ["Nội dung"])
         return TranslateFileResponse(columns=fallback_cols, rows=[])
 
-    # ── Pass 1: tra Cache + Glossary (không gọi AI), ghi kết quả hoặc đánh dấu pending ──
-    pending: List[Tuple[int, str, str]] = []
+    # ── Pass 1: tra Cache + Glossary (thứ tự ưu tiên), dedupe theo text để giảm gọi DB ──
+    seen_texts: Dict[str, Optional[str]] = {}
+    cell_tasks: List[Tuple[int, str, str]] = []
     for row_idx, row in enumerate(rows):
         for col in to_translate:
             text = (row.get(col) or "").strip()
             if not text:
                 row[col + "_translated"] = ""
                 continue
+            cell_tasks.append((row_idx, col, text))
+            if text not in seen_texts:
+                seen_texts[text] = None
+    unique_texts = list(seen_texts.keys())
+    for text in unique_texts:
+        try:
+            hit = await translate_check_only(
+                db, text, source_lang, target_lang,
+                game_id=game_id_int, game_category_id=game_category_id_int,
+            )
+            seen_texts[text] = hit
+        except Exception as e:
+            logger.warning("translate_check_only text=%s: %s", text[:40], e)
             try:
-                hit = await translate_check_only(
-                    db, text, source_lang, target_lang,
-                    game_id=game_id_int, game_category_id=game_category_id_int,
-                )
-            except Exception as e:
-                logger.warning("translate_check_only row=%s col=%s: %s", row_idx, col, e)
-                try:
-                    await db.rollback()
-                except Exception:
-                    pass
-                hit = None
-            if hit is not None:
-                row[col + "_translated"] = hit
-            else:
-                row[col + "_translated"] = None
-                pending.append((row_idx, col, text))
+                await db.rollback()
+            except Exception:
+                pass
+            seen_texts[text] = None
+    pending: List[_FilePendingWithPh] = []
+    for row_idx, col, text in cell_tasks:
+        hit = seen_texts.get(text)
+        if hit is not None:
+            rows[row_idx][col + "_translated"] = hit
+        else:
+            rows[row_idx][col + "_translated"] = None
+            text_for_ai, phs = _extract_placeholders(text)
+            pending.append((row_idx, col, text, text_for_ai, phs))
 
-    # ── Pass 2: gom batch theo token → gọi AI 1 lần / batch → lưu cache ──
-    token_batches = _build_token_batches(pending)
+    # ── Pass 2: gom batch theo token → gọi AI (gửi text đã thay placeholder) → khôi phục thẻ ──
+    token_batches = _build_token_batches_file(pending)
     for batch in token_batches:
-        texts_to_translate = [t for _, _, t in batch]
+        texts_to_translate = [item[3] for item in batch]
         try:
             results = await translate_with_ai_batch(
                 db,
@@ -1602,23 +730,25 @@ async def translate_file(
             )
         except Exception as e:
             logger.warning("translate_with_ai_batch: %s", e)
-            results = [t for _, _, t in batch]
+            results = [item[3] for item in batch]
         saved_count = 0
-        for (row_idx, col, orig_text), translated in zip(batch, results):
-            rows[row_idx][col + "_translated"] = translated or orig_text
-            if translated and translated != orig_text:
-                await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang, origin="file")
+        for item, translated in zip(batch, results):
+            row_idx, col, orig_text, _text_for_ai, phs = item
+            restored = _restore_placeholders(translated or "", phs)
+            rows[row_idx][col + "_translated"] = restored.strip() or orig_text
+            if restored.strip() and restored.strip() != orig_text:
+                await save_translation_to_cache(db, orig_text, restored.strip(), source_lang, target_lang, origin="file")
                 saved_count += 1
-            logger.info("translate_file batch: %d results, %d cached", len(batch), saved_count)
+        logger.info("translate_file batch: %d results, %d cached", len(batch), saved_count)
 
     output_columns = columns + [c + "_translated" for c in to_translate]
     translated_json = None
     translated_docx_b64 = None
     if name.endswith(".json"):
-        translated_json = _reconstruct_translated_json(content, rows, to_translate)
+        translated_json = json_handler.reconstruct_translated_json(content, rows, to_translate)
     elif name.endswith(".docx"):
         try:
-            docx_bytes = _build_translated_docx(content, columns, rows, to_translate)
+            docx_bytes = word_handler.build_translated_docx(content, columns, rows, to_translate)
             translated_docx_b64 = base64.b64encode(docx_bytes).decode("ascii")
         except Exception as e:
             logger.warning("Build translated DOCX: %s", e)
@@ -1695,15 +825,15 @@ async def translate_file_stream(
 
     # Đọc file
     if name.endswith(".xlsx"):
-        columns, rows = _read_full_excel(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = excel_handler.read_full_excel(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".csv"):
-        columns, rows = _read_full_csv(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = csv_handler.read_full_csv(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".json"):
-        columns, rows = _read_full_json(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = json_handler.read_full_json(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".xml"):
-        columns, rows = _read_full_xml(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = read_full_xml_handler(content, TRANSLATE_FILE_MAX_ROWS)
     elif name.endswith(".docx"):
-        columns, rows = _read_full_docx(content, TRANSLATE_FILE_MAX_ROWS)
+        columns, rows = word_handler.read_full_docx(content, TRANSLATE_FILE_MAX_ROWS)
     else:
         columns, rows = [], []
 
@@ -1717,34 +847,47 @@ async def translate_file_stream(
             yield _sse({"type": "done", "columns": list(selected_set) or columns or ["Nội dung"], "rows": [], "translated_json": None, "translated_docx_b64": None})
             return
 
-        # ── Pass 1: Cache + Glossary ──
-        pending: List[Tuple[int, str, str]] = []
+        # ── Pass 1: Cache + Glossary (thứ tự ưu tiên). Dedupe theo text để giảm số lần gọi DB. ──
+        unique_texts: List[str] = []
+        seen_texts: Dict[str, Optional[str]] = {}
+        cell_tasks: List[Tuple[int, str, str]] = []  # (row_idx, col, text)
         for row_idx, row in enumerate(rows):
             for col in to_translate:
                 text = (row.get(col) or "").strip()
                 if not text:
                     row[col + "_translated"] = ""
                     continue
+                cell_tasks.append((row_idx, col, text))
+                if text not in seen_texts:
+                    seen_texts[text] = None
+                    unique_texts.append(text)
+        for text in unique_texts:
+            try:
+                hit = await translate_check_only(
+                    db, text, source_lang, target_lang,
+                    game_id=game_id_int, game_category_id=game_category_id_int,
+                )
+                seen_texts[text] = hit
+            except Exception as e:
+                logger.warning("SSE translate_check_only text=%s: %s", text[:40], e)
                 try:
-                    hit = await translate_check_only(
-                        db, text, source_lang, target_lang,
-                        game_id=game_id_int, game_category_id=game_category_id_int,
-                    )
-                except Exception as e:
-                    logger.warning("SSE translate_check_only row=%s col=%s: %s", row_idx, col, e)
-                    try:
-                        await db.rollback()
-                    except Exception:
-                        pass
-                    hit = None
-                if hit is not None:
-                    row[col + "_translated"] = hit
-                else:
-                    row[col + "_translated"] = None
-                    pending.append((row_idx, col, text))
+                    await db.rollback()
+                except Exception:
+                    pass
+                seen_texts[text] = None
+        pending: List[_FilePendingWithPh] = []
+        for row_idx, col, text in cell_tasks:
+            hit = seen_texts.get(text)
+            if hit is not None:
+                rows[row_idx][col + "_translated"] = hit
+            else:
+                rows[row_idx][col + "_translated"] = None
+                text_for_ai, phs = _extract_placeholders(text)
+                pending.append((row_idx, col, text, text_for_ai, phs))
+        logger.info("SSE Pass 1: %d unique texts, %d cache/glossary hits, %d pending", len(unique_texts), len(cell_tasks) - len(pending), len(pending))
 
         total_cells = len(pending)
-        token_batches = _build_token_batches(pending)
+        token_batches = _build_token_batches_file(pending)
         batch_total = len(token_batches)
 
         yield _sse({"type": "start", "total": total_cells, "batch_total": batch_total})
@@ -1752,7 +895,7 @@ async def translate_file_stream(
         logger.info("SSE file translate: %d pending cells, %d batches", total_cells, batch_total)
         cells_done = 0
         for batch_idx, batch in enumerate(token_batches):
-            texts_to_translate = [t for _, _, t in batch]
+            texts_to_translate = [item[3] for item in batch]
             logger.info("SSE batch %s input (first 3): %s", batch_idx, texts_to_translate[:3])
             try:
                 results = await translate_with_ai_batch(
@@ -1769,13 +912,15 @@ async def translate_file_stream(
                 logger.info("SSE batch %s output (first 3): %s", batch_idx, results[:3])
             except Exception as e:
                 logger.warning("SSE translate batch %s FAILED: %s", batch_idx, e, exc_info=True)
-                results = [t for _, _, t in batch]
+                results = [item[3] for item in batch]
 
             saved_count = 0
-            for (row_idx, col, orig_text), translated in zip(batch, results):
-                rows[row_idx][col + "_translated"] = translated or orig_text
-                if translated and translated != orig_text:
-                    await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang, origin="file")
+            for item, translated in zip(batch, results):
+                row_idx, col, orig_text, _text_for_ai, phs = item
+                restored = _restore_placeholders(translated or "", phs)
+                rows[row_idx][col + "_translated"] = restored.strip() or orig_text
+                if restored.strip() and restored.strip() != orig_text:
+                    await save_translation_to_cache(db, orig_text, restored.strip(), source_lang, target_lang, origin="file")
                     saved_count += 1
             logger.info("SSE batch %s: %d results, %d cached", batch_idx, len(batch), saved_count)
 
@@ -1789,7 +934,7 @@ async def translate_file_stream(
                 "batch_total": batch_total,
                 "percent": percent,
                 "batch_size": len(batch),
-                "batch_tokens": sum(_estimate_tokens(t) for _, _, t in batch),
+                "batch_tokens": sum(_estimate_tokens(item[3]) for item in batch),
             })
 
         # Xây dựng kết quả cuối
@@ -1797,10 +942,10 @@ async def translate_file_stream(
         translated_json = None
         translated_docx_b64 = None
         if name.endswith(".json"):
-            translated_json = _reconstruct_translated_json(content, rows, to_translate)
+            translated_json = json_handler.reconstruct_translated_json(content, rows, to_translate)
         elif name.endswith(".docx"):
             try:
-                docx_bytes = _build_translated_docx(content, columns, rows, to_translate)
+                docx_bytes = word_handler.build_translated_docx(content, columns, rows, to_translate)
                 translated_docx_b64 = base64.b64encode(docx_bytes).decode("ascii")
             except Exception as e:
                 logger.warning("SSE build DOCX: %s", e)
@@ -1848,7 +993,7 @@ async def translate_json_file(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="File rỗng.")
-    text = _decode_text(content)
+    text = decode_text(content)
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
@@ -1882,20 +1027,31 @@ async def translate_json_file(
     context = (context or "").strip() or None
     style = (style or "").strip() or None
 
-    result = await _translate_json_recursive(
-        data,
-        db,
-        source_lang,
-        target_lang,
-        prompt_id_int,
-        context,
-        style,
-        smart_filter=use_smart_filter,
-        translate_keys=use_translate_keys,
-        game_id=game_id_int,
-        game_category_id=game_category_id_int,
-    )
-    body = json.dumps(result, ensure_ascii=False, indent=2)
+    try:
+        result = await _translate_json_recursive(
+            data,
+            db,
+            source_lang,
+            target_lang,
+            prompt_id_int,
+            context,
+            style,
+            smart_filter=use_smart_filter,
+            translate_keys=use_translate_keys,
+            game_id=game_id_int,
+            game_category_id=game_category_id_int,
+        )
+        body = json.dumps(result, ensure_ascii=False, indent=2, default=str)
+    except ValueError as e:
+        logger.warning("translate_json_file ValueError: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("translate_json_file error: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail=getattr(e, "message", str(e)) or "Lỗi khi dịch file JSON. Vui lòng thử lại hoặc kiểm tra Cài đặt (Gemini API Key).",
+        )
+
     filename = (file.filename or "translated").replace(".json", "") + "_translated.json"
     return Response(
         content=body.encode("utf-8"),
@@ -1929,8 +1085,8 @@ async def translate_xml_file(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="File rỗng.")
-    text = _decode_text(content)
-    decl, rest = _split_xml_declaration(text)
+    text = decode_text(content)
+    decl, rest = split_xml_declaration(text)
     if not rest.strip():
         raise HTTPException(status_code=400, detail="File XML không có nội dung.")
     try:
@@ -1981,78 +1137,66 @@ async def translate_xml_file(
         game_id=game_id_int,
         game_category_id=game_category_id_int,
     )
-    out_body = (_xml_to_string(root, declaration=decl) if decl else _xml_to_string(root))
+    out_body = (xml_to_string(root, declaration=decl) if decl else xml_to_string(root))
     filename = (file.filename or "translated").replace(".xml", "") + "_translated.xml"
     return Response(
         content=out_body.encode("utf-8"),
-        media_type="application/xml",
+        media_type="application/xml; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
-def _export_csv(columns: List[str], rows: List[dict]) -> bytes:
-    out = io.StringIO()
-    out.write("\uFEFF")
-    writer = csv.writer(out, lineterminator="\r\n")
-    writer.writerow(columns)
-    for row in rows:
-        writer.writerow([str(row.get(c, "") or "") for c in columns])
-    return out.getvalue().encode("utf-8")
+@router.post("/parse-xml-content", response_model=ParseXmlContentResponse)
+async def parse_xml_content(body: ParseXmlContentRequest):
+    """
+    Parse chuỗi XML (nội dung đã dịch) thành columns + rows để hiển thị hiệu đính.
+    Trả về root_tag, row_tag, root_attribs, declaration để rebuild sau khi sửa.
+    """
+    columns, rows, root_tag, row_tag, root_attribs, declaration = parse_xml_string_to_rows(body.content or "")
+    return ParseXmlContentResponse(
+        columns=columns,
+        rows=rows,
+        root_tag=root_tag,
+        row_tag=row_tag,
+        root_attribs=root_attribs,
+        declaration=declaration,
+    )
 
 
-def _export_xlsx(columns: List[str], rows: List[dict]) -> bytes:
-    try:
-        import openpyxl
-    except ImportError:
-        raise HTTPException(status_code=503, detail="openpyxl chưa được cài đặt.")
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(columns)
-    for row in rows:
-        ws.append([str(row.get(c, "") or "") for c in columns])
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+@router.post("/rebuild-xml-from-rows", response_model=RebuildXmlResponse)
+async def rebuild_xml_from_rows_api(body: RebuildXmlRequest):
+    """Dựng lại chuỗi XML từ rows sau khi hiệu đính."""
+    content = rebuild_xml_from_rows(
+        root_tag=body.root_tag,
+        row_tag=body.row_tag,
+        root_attribs=body.root_attribs or {},
+        columns=body.columns,
+        rows=body.rows,
+        declaration=body.declaration or "",
+    )
+    return RebuildXmlResponse(content=content)
 
 
-def _export_json(columns: List[str], rows: List[dict]) -> bytes:
-    data = [dict((c, row.get(c, "") or "") for c in columns) for row in rows]
-    return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+# Giới hạn dòng khi parse JSON từ chuỗi (xem trước / hiệu đính)
+PARSE_JSON_CONTENT_MAX_ROWS = 50_000
 
 
-def _xml_tag(s: str) -> str:
-    """Tên thẻ XML hợp lệ (chữ, số, _)."""
-    return "".join(c if c.isalnum() or c == "_" else "_" for c in (s or "col"))
-
-
-def _export_xml(columns: List[str], rows: List[dict]) -> bytes:
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>', "<rows>"]
-    for row in rows:
-        lines.append("  <row>")
-        for c in columns:
-            val = (row.get(c) or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-            tag = _xml_tag(c)
-            lines.append(f"    <{tag}>{val}</{tag}>")
-        lines.append("  </row>")
-    lines.append("</rows>")
-    return "\n".join(lines).encode("utf-8")
-
-
-def _export_docx(columns: List[str], rows: List[dict]) -> bytes:
-    try:
-        from docx import Document
-    except ImportError:
-        raise HTTPException(status_code=503, detail="python-docx chưa được cài đặt.")
-    doc = Document()
-    table = doc.add_table(rows=1 + len(rows), cols=len(columns))
-    for j, col in enumerate(columns):
-        table.rows[0].cells[j].text = str(col)
-    for i, row in enumerate(rows):
-        for j, col in enumerate(columns):
-            table.rows[i + 1].cells[j].text = str(row.get(col, "") or "")
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+@router.post("/parse-json-content", response_model=ParseJsonContentResponse)
+async def parse_json_content(body: ParseJsonContentRequest):
+    """
+    Parse chuỗi JSON thành columns + rows (toàn bộ, không giới hạn 5 dòng).
+    Dùng cho bước 5: xem trước nội dung cũ/đã dịch và hiệu đính.
+    """
+    content = (body.content or "").strip()
+    if not content:
+        return ParseJsonContentResponse(columns=["Nội dung"], rows=[])
+    raw = content.encode("utf-8")
+    columns, rows = json_handler.read_full_json(raw, PARSE_JSON_CONTENT_MAX_ROWS)
+    if not columns:
+        columns = ["Nội dung"]
+    # Đảm bảo mỗi row là Dict[str, str] cho response
+    str_rows = [{k: (str(v) if v is not None else "") for k, v in row.items()} for row in rows]
+    return ParseJsonContentResponse(columns=columns, rows=str_rows)
 
 
 @router.post("/parse-file-full", response_model=ParseAllRowsResponse)
@@ -2070,68 +1214,11 @@ async def parse_file_full(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File rỗng.")
 
     if filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls"):
-        try:
-            import openpyxl
-        except ImportError:
-            raise HTTPException(status_code=503, detail="openpyxl chưa được cài đặt.")
-        workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        sheet = workbook.active
-        if not sheet:
-            return ParseAllRowsResponse(columns=[], rows=[], total=0)
-        header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), None)
-        if not header_row:
-            return ParseAllRowsResponse(columns=[], rows=[], total=0)
-        raw_columns = [_cell_to_str(h) for h in header_row]
-        valid_col_indices = [i for i, c in enumerate(raw_columns) if c.strip()]
-        seen: dict = {}
-        columns: List[str] = []
-        for i in valid_col_indices:
-            c = raw_columns[i]
-            if c in seen:
-                seen[c] += 1
-                c = f"{c}_{seen[c]}"
-            else:
-                seen[c] = 1
-            columns.append(c)
-        rows: List[dict] = []
-        for row in sheet.iter_rows(min_row=2, max_row=1 + TRANSLATE_FILE_MAX_ROWS, values_only=True):
-            row_dict = {
-                col_name: (_cell_to_str(row[orig_i]) if orig_i < len(row) else "")
-                for col_name, orig_i in zip(columns, valid_col_indices)
-            }
-            if not any(v.strip() for v in row_dict.values()):
-                continue
-            rows.append(row_dict)
-        workbook.close()
+        columns, rows = excel_handler.read_full_excel(content, TRANSLATE_FILE_MAX_ROWS)
         return ParseAllRowsResponse(columns=columns, rows=rows, total=len(rows))
-
     elif filename_lower.endswith(".csv"):
-        try:
-            text = content.decode("utf-8-sig").strip()
-        except Exception:
-            text = content.decode("utf-8", errors="replace").strip()
-        reader = csv.reader(io.StringIO(text))
-        header = next(reader, None)
-        if not header:
-            return ParseAllRowsResponse(columns=[], rows=[], total=0)
-        raw_cols = [h.strip() or "Cột" for h in header]
-        seen2: dict = {}
-        columns2: List[str] = []
-        for c in raw_cols:
-            if c in seen2:
-                seen2[c] += 1
-                c = f"{c}_{seen2[c]}"
-            else:
-                seen2[c] = 1
-            columns2.append(c)
-        rows2: List[dict] = []
-        for i, row in enumerate(reader):
-            if i >= TRANSLATE_FILE_MAX_ROWS:
-                break
-            row_dict = {col: (row[j].strip() if j < len(row) else "") for j, col in enumerate(columns2)}
-            rows2.append(row_dict)
-        return ParseAllRowsResponse(columns=columns2, rows=rows2, total=len(rows2))
-
+        columns, rows = csv_handler.read_full_csv(content, TRANSLATE_FILE_MAX_ROWS)
+        return ParseAllRowsResponse(columns=columns, rows=rows, total=len(rows))
     else:
         raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .xlsx hoặc .csv cho Hiệu Đính File.")
 
@@ -2143,16 +1230,31 @@ async def proofread_row_endpoint(
 ):
     """
     Hiệu đính 1 dòng bằng AI: nhận văn bản gốc + bản dịch hiện tại, trả về bản dịch đã cải thiện.
+    Tự động giữ nguyên placeholder/thẻ (ví dụ: <br>, {x}, %s, ...) bằng cách ẩn thành __PH_n__ trước khi gửi AI.
     """
     if not body.original.strip():
         raise HTTPException(status_code=400, detail="Văn bản gốc không được để trống.")
     if not body.source_lang.strip() or not body.target_lang.strip():
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngôn ngữ nguồn và đích.")
+
+    # Bóc placeholder (bao gồm thẻ HTML như <br>, <br/>, {x}, %s, ...) thành __PH_n__ dùng CHUNG
+    # cho cả original và translated để AI không làm mất/thay đổi thẻ.
+    phs: List[str] = []
+
+    def _repl(m: re.Match) -> str:
+        phs.append(m.group(0))
+        return f"__PH_{len(phs) - 1}__"
+
+    original_stripped = body.original.strip()
+    translated_stripped = (body.translated or "").strip()
+    original_for_ai = _RE_PLACEHOLDER.sub(_repl, original_stripped)
+    translated_for_ai = _RE_PLACEHOLDER.sub(_repl, translated_stripped)
+
     try:
         result = await proofread_with_ai(
             db,
-            original=body.original.strip(),
-            translated=(body.translated or "").strip(),
+            original=original_for_ai,
+            translated=translated_for_ai,
             source_lang=body.source_lang.strip(),
             target_lang=body.target_lang.strip(),
             prompt_id=body.prompt_id,
@@ -2163,18 +1265,21 @@ async def proofread_row_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính AI thất bại: {getattr(e, 'message', str(e))}")
+    # Khôi phục placeholder về dạng gốc
+    safe_result = _restore_placeholders(result or "", phs)
+
     # Chỉ ghi cache khi hiệu đính ra nội dung khác với bản cũ; không đổi thì không ghi đè nguồn
-    current_translated = (body.translated or "").strip()
-    if result and (result.strip() != current_translated):
+    current_translated = translated_stripped
+    if safe_result and (safe_result.strip() != current_translated):
         try:
             await save_translation_to_cache(
-                db, body.original.strip(), result,
+                db, original_stripped, safe_result,
                 body.source_lang.strip(), body.target_lang.strip(),
                 origin="proofread",
             )
         except Exception:
             pass
-    return ProofreadRowResponse(proofread=result)
+    return ProofreadRowResponse(proofread=safe_result)
 
 
 @router.post("/proofread-batch", response_model=ProofreadBatchResponse)
@@ -2190,10 +1295,25 @@ async def proofread_batch_endpoint(
         raise HTTPException(status_code=400, detail="Danh sách dòng không được rỗng.")
     if not body.source_lang.strip() or not body.target_lang.strip():
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngôn ngữ nguồn và đích.")
-    items_dicts = [
-        {"index": item.index, "original": item.original, "translated": item.translated}
-        for item in body.items
-    ]
+
+    # Với mỗi item, bóc placeholder (kể cả thẻ HTML như <br>) thành __PH_n__ dùng chung
+    # cho original & translated để AI không xóa/thay đổi thẻ. Lưu lại danh sách placeholder
+    # theo index để khôi phục sau.
+    items_dicts: List[Dict[str, str]] = []
+    placeholders_map: Dict[int, List[str]] = {}
+    for item in body.items:
+        phs: List[str] = []
+
+        def _repl(m: re.Match) -> str:
+            phs.append(m.group(0))
+            return f"__PH_{len(phs) - 1}__"
+
+        original_ai = _RE_PLACEHOLDER.sub(_repl, item.original)
+        translated_ai = _RE_PLACEHOLDER.sub(_repl, item.translated)
+        items_dicts.append(
+            {"index": item.index, "original": original_ai, "translated": translated_ai}
+        )
+        placeholders_map[item.index] = phs
     try:
         results = await proofread_with_ai_batch(
             db,
@@ -2208,26 +1328,34 @@ async def proofread_batch_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính batch AI thất bại: {getattr(e, 'message', str(e))}")
+
+    # Khôi phục placeholder cho từng dòng và lưu cache nếu thay đổi
+    safe_results: List[ProofreadBatchResultItem] = []
     items_by_index = {item["index"]: item for item in items_dicts}
     for r in results:
-        orig_item = items_by_index.get(r["index"])
-        if not orig_item or not r.get("proofread"):
+        idx = r.get("index")
+        orig_item = items_by_index.get(idx)
+        if not orig_item:
             continue
+        raw_proof = (r.get("proofread") or "").strip()
+        phs = placeholders_map.get(idx, [])
+        restored = _restore_placeholders(raw_proof, phs).strip()
+        if not restored:
+            restored = (orig_item.get("translated") or "").strip()
         # Chỉ ghi cache khi hiệu đính ra nội dung khác với bản cũ; không đổi thì không ghi đè nguồn
         old_translated = (orig_item.get("translated") or "").strip()
-        new_proofread = (r["proofread"] or "").strip()
-        if new_proofread != old_translated:
+        if restored and (restored != old_translated):
             try:
                 await save_translation_to_cache(
-                    db, (orig_item.get("original") or "").strip(), new_proofread,
+                    db, (orig_item.get("original") or "").strip(), restored,
                     body.source_lang.strip(), body.target_lang.strip(),
                     origin="proofread",
                 )
             except Exception:
                 pass
-    return ProofreadBatchResponse(
-        results=[ProofreadBatchResultItem(index=r["index"], proofread=r["proofread"]) for r in results]
-    )
+        safe_results.append(ProofreadBatchResultItem(index=idx, proofread=restored))
+
+    return ProofreadBatchResponse(results=safe_results)
 
 
 @router.post("/export-file")
@@ -2244,19 +1372,19 @@ async def export_file(body: ExportFileRequest):
     if not columns:
         raise HTTPException(status_code=400, detail="columns không được rỗng.")
     if fmt == "csv":
-        content = _export_csv(columns, rows)
+        content = csv_handler.export_csv(columns, rows)
         media_type = "text/csv; charset=utf-8"
     elif fmt == "xlsx":
-        content = _export_xlsx(columns, rows)
+        content = excel_handler.export_xlsx(columns, rows)
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif fmt == "json":
-        content = _export_json(columns, rows)
+        content = json_handler.export_json(columns, rows)
         media_type = "application/json; charset=utf-8"
     elif fmt == "xml":
-        content = _export_xml(columns, rows)
+        content = export_xml_handler(columns, rows)
         media_type = "application/xml; charset=utf-8"
     else:
-        content = _export_docx(columns, rows)
+        content = word_handler.export_docx(columns, rows)
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     base = (body.filename or "dich").strip() or "dich"
     filename = f"{base}_translated.{fmt}"
@@ -2353,7 +1481,8 @@ async def translate(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Dịch văn bản theo thứ tự ưu tiên: Cache -> Từ điển game -> Từ điển chung -> AI (Google Gemini).
+    Dịch văn bản theo thứ tự ưu tiên: Cache -> Từ điển game (nếu chọn game) -> Từ điển chung -> AI (Google Gemini).
+    game_id (không bắt buộc): khi chọn game, từ điển game áp dụng trước từ điển chung; không chọn thì chỉ dùng cache + từ điển chung + AI.
     Nếu dùng AI, kết quả được lưu cache cho lần sau. Prompt: prompt_id từ Quản lý Prompts hoặc mặc định.
     """
     if not body.text or not body.text.strip():
@@ -2375,6 +1504,8 @@ async def translate(
             prompt_id=body.prompt_id,
             context=body.context or None,
             style=body.style or None,
+            game_id=body.game_id,
+            game_category_id=body.game_category_id,
         )
     except ValueError as e:
         msg = str(e)

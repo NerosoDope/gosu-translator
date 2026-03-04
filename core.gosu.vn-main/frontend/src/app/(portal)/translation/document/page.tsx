@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect } from 'react';
 import Button from '@/components/ui/Button';
-import { jobAPI, promptsAPI, languageAPI, proofreadAPI, qualityCheckAPI } from '@/lib/api';
+import { jobAPI, promptsAPI, languageAPI, gameAPI, proofreadAPI, qualityCheckAPI } from '@/lib/api';
 import type { QualityCheckResult } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
 import { useToastContext } from '@/context/ToastContext';
 import { authStore } from '@/lib/auth';
+import { generateJobCode, JOB_CODE_PREFIX } from '@/lib/jobCode';
 
 const MAX_CHARS = 5000;
 
@@ -43,6 +44,10 @@ export default function TranslateDemoPage() {
   const [context, setContext] = useState('');
   const [selectedPromptId, setSelectedPromptId] = useState<number | ''>('');
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
+  /** Chọn game (không bắt buộc): áp dụng cache > từ điển game > từ điển chung > AI */
+  const [gameId, setGameId] = useState<number | null>(null);
+  const [games, setGames] = useState<{ id: number; name: string }[]>([]);
+  const [loadingGames, setLoadingGames] = useState(true);
   /** Tất cả ngôn ngữ từ Quản lý ngôn ngữ (cho dropdown nguồn) */
   const [sourceLanguageOptions, setSourceLanguageOptions] = useState<LanguageItem[]>([]);
   /** Map sourceCode -> danh sách ngôn ngữ đích được hỗ trợ (từ cặp ngôn ngữ) */
@@ -68,8 +73,7 @@ export default function TranslateDemoPage() {
       .then((res: any) => {
         if (mounted && res?.data && Array.isArray(res.data)) {
           setPrompts(res.data);
-          const defaultP = res.data.find((p: any) => p.is_default);
-          if (defaultP) setSelectedPromptId(defaultP.id);
+          // Luôn mặc định chọn "Prompt mặc định" (selectedPromptId giữ '' => backend dùng default)
         }
       })
       .catch(() => {
@@ -86,6 +90,25 @@ export default function TranslateDemoPage() {
   useEffect(() => {
     setTranslationStyleOptions(['Tự nhiên, mượt mà', 'Sát nghĩa, giữ cấu trúc', 'Đầy đủ, chi tiết', 'Ngắn gọn, súc tích', 'Văn phong trang trọng']);
     setLoadingGameCategories(false);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    gameAPI
+      .getList({ limit: 100, is_active: true })
+      .then((res: any) => {
+        if (!mounted) return;
+        const body = res?.data;
+        const list = Array.isArray(body) ? body : (body?.data ?? []);
+        setGames(list.map((g: any) => ({ id: g.id, name: g.name || `Game #${g.id}` })));
+      })
+      .catch(() => {
+        if (mounted) setGames([]);
+      })
+      .finally(() => {
+        if (mounted) setLoadingGames(false);
+      });
+    return () => { mounted = false; };
   }, []);
 
   useEffect(() => {
@@ -176,8 +199,9 @@ export default function TranslateDemoPage() {
     setQualityResult(null);
     setQualityExpanded(false);
 
-    const jobCode = `DIRECT-${Date.now()}`;
+    const jobCode = generateJobCode(JOB_CODE_PREFIX.TRANSLATE_DIRECT);
     const payload = {
+      source_type: 'direct',
       text: content,
       source_lang: sourceLang,
       target_lang: targetLang,
@@ -185,6 +209,7 @@ export default function TranslateDemoPage() {
       context: context || undefined,
       use_default_prompt: !selectedPromptId,
       prompt_id: selectedPromptId || undefined,
+      game_id: gameId ?? undefined,
     };
 
     try {
@@ -348,6 +373,25 @@ export default function TranslateDemoPage() {
               rows={2}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 focus:ring-2 focus:ring-blue-500 resize-none"
             />
+          </div>
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Chọn game <span className="text-gray-400 font-normal">(Tùy chọn)</span>
+            </label>
+            <select
+              value={gameId ?? ''}
+              onChange={(e) => setGameId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+              disabled={loadingGames}
+            >
+              <option value="">-- Không chọn game --</option>
+              {games.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Khi chọn game: áp dụng Cache → Từ điển game → Từ điển chung → AI.
+            </p>
           </div>
           <div className="mt-4">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

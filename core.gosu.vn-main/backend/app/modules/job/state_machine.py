@@ -7,26 +7,25 @@ Job State Machine
                   │                                 │
    create ──► pending ──► in_progress ──► completed │ (terminal)
                   │  ▲        │                     │
-                  │  │        ▼                     │
+                  │  │        └──► failed           │
               cancelled ◄── failed                  │
-                  │  ▲                              │
-                  │  │ retry                        │
-                  └──┘                              │
-                                                    │
-   Soft-delete có thể áp dụng với mọi trạng thái.  │
-   Hard-delete chỉ khi đã soft-delete.              │
-   ──────────────────────────────────────────────────┘
+                  │  ▲        │                     │
+                  │  │ retry  └── retry ─────────────┘
+                  └──┘
+
+   Soft-delete có thể áp dụng với mọi trạng thái.
+   Hard-delete chỉ khi đã soft-delete.
 
 Bảng chuyển trạng thái:
-┌─────────────────┬──────────────────────────────────────────────────────┐
-│ Trạng thái hiện │ Trạng thái tiếp theo hợp lệ                          │
-├─────────────────┼──────────────────────────────────────────────────────┤
-│ pending         │ in_progress, cancelled                               │
-│ in_progress     │ completed, failed, cancelled                         │
-│ completed       │ (terminal — không chuyển được)                       │
-│ failed          │ pending (retry)                                      │
-│ cancelled       │ pending (retry)                                      │
-└─────────────────┴──────────────────────────────────────────────────────┘
+┌─────────────────┬────────────────────────────────────┐
+│ Trạng thái hiện │ Trạng thái tiếp theo hợp lệ        │
+├─────────────────┼────────────────────────────────────┤
+│ pending         │ in_progress, cancelled             │
+│ in_progress     │ completed, failed, cancelled      │
+│ completed       │ (terminal — không chuyển được)    │
+│ failed          │ pending (retry)                    │
+│ cancelled       │ pending (retry)                    │
+└─────────────────┴────────────────────────────────────┘
 """
 
 from enum import Enum
@@ -48,9 +47,9 @@ TERMINAL_STATES: Set[JobStatus] = {JobStatus.COMPLETED}
 VALID_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     JobStatus.PENDING:      {JobStatus.IN_PROGRESS, JobStatus.CANCELLED},
     JobStatus.IN_PROGRESS:  {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED},
-    JobStatus.COMPLETED:    set(),  # terminal
-    JobStatus.FAILED:       {JobStatus.PENDING},   # retry
-    JobStatus.CANCELLED:    {JobStatus.PENDING},   # retry
+    JobStatus.COMPLETED:   set(),  # terminal
+    JobStatus.FAILED:      {JobStatus.PENDING},   # retry
+    JobStatus.CANCELLED:   {JobStatus.PENDING},   # retry
 }
 
 # Các action được phép ở từng trạng thái (dùng cho frontend buttons)

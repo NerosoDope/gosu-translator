@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
+import { useRouter } from 'next/navigation';
 import { authStore } from '@/lib/auth';
 import DataTable, { Column } from '@/components/data/DataTable';
 import Pagination from '@/components/data/Pagination';
@@ -66,9 +67,35 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
 };
 
+function isFileTranslationJob(job: Job): boolean {
+  return job.payload?.source_type === 'file' || job.payload?.filename != null;
+}
+
+function hasDownloadableResult(job: Job): boolean {
+  if (job.status !== 'completed' || !job.result) return false;
+  const r = job.result as Record<string, unknown>;
+  return !!(r.translated_docx_b64 || r.translated_json || (Array.isArray(r.rows) && r.rows.length > 0));
+}
+
+function getJobSourceLabel(job: Job): string {
+  const st = job.payload?.source_type;
+  if (st === 'file') return 'Dịch file';
+  if (st === 'direct') return 'Dịch trực tiếp';
+  if (st === 'proofread') return 'Hiệu đính';
+  const code = (job.job_code || '').toUpperCase();
+  if (code.startsWith('DIRECT-')) return 'Dịch trực tiếp';
+  if (code.startsWith('TRANSLATION-FILE-')) return 'Dịch file';
+  if (code.startsWith('PROOFREAD-')) return 'Hiệu đính';
+  if (job.payload?.filename != null) return 'Dịch file';
+  if (job.payload?.text != null) return 'Dịch trực tiếp';
+  return '—';
+}
+
 function MyJobsPage() {
   const toast = useToastContext();
+  const router = useRouter();
   const [userId, setUserId] = useState<number | null>(null);
+  const [downloadingJobId, setDownloadingJobId] = useState<number | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +205,73 @@ function MyJobsPage() {
       loadJobs();
     } catch (err: any) {
       toast.error(getApiError(err, 'Không thể khôi phục job'));
+    }
+  };
+
+  const handleProofread = (job: Job) => {
+    router.push('/translation/proofread');
+  };
+
+  const handleDownload = async (job: Job) => {
+    setDownloadingJobId(job.id);
+    try {
+      const res = await jobAPI.get(job.id);
+      const data = res.data;
+      const result = (data?.result || {}) as Record<string, unknown>;
+      const filename = (data?.payload?.filename as string) || job.job_code || 'translated';
+      const baseName = filename.replace(/\.[^.]+$/, '') || 'translated';
+
+      if (result.translated_docx_b64 && typeof result.translated_docx_b64 === 'string') {
+        const bin = atob(result.translated_docx_b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        const blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_translated.docx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Đã tải file DOCX.');
+        return;
+      }
+      if (result.translated_json != null) {
+        const blob = new Blob([JSON.stringify(result.translated_json, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_translated.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Đã tải file JSON.');
+        return;
+      }
+      if (Array.isArray(result.rows) && result.rows.length > 0) {
+        const columns = (result.output_columns as string[]) || Object.keys((result.rows[0] as Record<string, unknown>) || {});
+        const header = columns.join(',');
+        const csvRows = (result.rows as Record<string, unknown>[]).map((row) =>
+          columns.map((c) => {
+            const v = row[c];
+            const s = v == null ? '' : String(v);
+            return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+          }).join(',')
+        );
+        const csv = [header, ...csvRows].join('\n');
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_translated.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Đã tải file CSV.');
+        return;
+      }
+      toast.warning('Job này chưa lưu file đã dịch. Các job dịch file mới sẽ hỗ trợ tải xuống.');
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? 'Không thể tải file.');
+    } finally {
+      setDownloadingJobId(null);
     }
   };
 
@@ -307,6 +401,23 @@ function MyJobsPage() {
             <button onClick={() => setViewingJob(j)} className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100" title="Xem chi tiết">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
             </button>
+            {!del && isFileTranslationJob(j) && j.status === 'completed' && (
+              <button onClick={() => handleProofread(j)} className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300" title="Hiệu đính">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </button>
+            )}
+            {!del && isFileTranslationJob(j) && (hasDownloadableResult(j) || j.status === 'completed') && (
+              <button
+                onClick={() => handleDownload(j)}
+                disabled={downloadingJobId === j.id}
+                className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={downloadingJobId === j.id ? 'Đang tải...' : 'Tải xuống file đã dịch'}
+              >
+                <svg className={`w-5 h-5 ${downloadingJobId === j.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              </button>
+            )}
             {canDo('edit', s, del) && (
               <button onClick={() => handleJobEdit(j)} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" title="Chỉnh sửa">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
@@ -490,6 +601,7 @@ function MyJobsPage() {
                 <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Thông tin cơ bản</h4>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Loại job</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.job_type}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Nguồn</span><span className="font-medium text-gray-900 dark:text-gray-100">{getJobSourceLabel(viewingJob)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thử lại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.retry_count ?? 0} / {viewingJob.max_retry ?? 3}</span></div>
                   {viewingJob.game_id && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Game ID</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_id}</span></div>}
                   {viewingJob.game_genre && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thể loại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_genre}</span></div>}
@@ -543,6 +655,30 @@ function MyJobsPage() {
                 <div>
                   <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Dữ liệu đầu vào (Payload)</h4>
                   <pre className="p-3 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs overflow-x-auto text-gray-800 dark:text-gray-200">{JSON.stringify(viewingJob.payload, null, 2)}</pre>
+                </div>
+              )}
+
+              {isFileTranslationJob(viewingJob) && viewingJob.status === 'completed' && (
+                <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <button
+                    type="button"
+                    onClick={() => { handleProofread(viewingJob); setViewingJob(null); }}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Hiệu đính
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(viewingJob)}
+                    disabled={downloadingJobId === viewingJob.id}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <svg className={`w-4 h-4 ${downloadingJobId === viewingJob.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    Tải xuống file đã dịch
+                  </button>
                 </div>
               )}
             </div>

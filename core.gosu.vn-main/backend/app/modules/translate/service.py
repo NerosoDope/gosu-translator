@@ -27,6 +27,10 @@ Chỉ trả về bản dịch, không giải thích, không thêm tiền tố ha
 # TTL cache mặc định (giây) khi lưu bản dịch AI
 TRANSLATE_CACHE_TTL = 86400
 
+# Giới hạn token đầu ra cho AI — tránh API cắt bớt nội dung (default có thể ~1024)
+TRANSLATE_MAX_OUTPUT_TOKENS = 8192
+TRANSLATE_BATCH_MAX_OUTPUT_TOKENS = 16384
+
 # Số thuật ngữ tối đa inject vào prompt (game glossary + global glossary)
 GLOSSARY_PROMPT_MAX_TERMS = 60
 
@@ -242,6 +246,7 @@ async def translate_with_ai(
             config=types.GenerateContentConfig(
                 system_instruction=system_content,
                 temperature=0.3,
+                max_output_tokens=TRANSLATE_MAX_OUTPUT_TOKENS,
             ),
         )
         translated = (response.text or "").strip()
@@ -260,12 +265,12 @@ async def translate_with_ai(
 # Separator dùng để ngăn cách các segment trong batch – không trùng với nội dung thực tế
 _BATCH_SEP = "|||SEGMENT|||"
 
-# Prompt batch: yêu cầu AI dịch từng dòng, giữ nguyên cấu trúc đánh số
+# Prompt batch: yêu cầu AI dịch từng dòng, giữ nguyên cấu trúc đánh số và placeholder __PH_n__
 _BATCH_SYSTEM_PROMPT = (
     "Bạn là một dịch giả {source_lang} chuyên nghiệp. "
     "Hãy dịch TỪNG dòng được đánh số từ {source_lang} sang {target_lang}. "
     "Chỉ trả về các dòng đã dịch theo đúng định dạng đánh số, không giải thích, không thêm văn bản nào khác. "
-    "Giữ nguyên các placeholder như {{variable}}, %s, %d, {{0}} không thay đổi.\n"
+    "Giữ nguyên các placeholder như {{variable}}, %s, %d, {{0}} và chuỗi __PH_0__, __PH_1__, ... (không xóa, không thay thế).\n"
     "Định dạng trả về:\n1. <dòng dịch 1>\n2. <dòng dịch 2>\n..."
 )
 
@@ -356,6 +361,7 @@ async def translate_with_ai_batch(
             config=types.GenerateContentConfig(
                 system_instruction=system_content,
                 temperature=0.3,
+                max_output_tokens=TRANSLATE_BATCH_MAX_OUTPUT_TOKENS,
             ),
         )
         raw_output = (response.text or "").strip()
@@ -369,19 +375,27 @@ async def translate_with_ai_batch(
         raise
 
     # Parse output: mỗi dòng dạng "N. <nội dung>" hoặc "N) <nội dung>" → dict {index: text}
+    # Dòng không bắt đầu bằng số (continuation) → gộp vào segment trước để không mất nội dung
     # Cũng xử lý markdown bold: "**N.** text" hoặc "**N.**text"
     import re as _re
     parsed: Dict[int, str] = {}
+    last_idx: Optional[int] = None
     for line in raw_output.splitlines():
-        line = line.strip()
+        stripped = line.strip()
+        if not stripped:
+            continue
         # Xóa markdown bold nếu có: **1.** → 1.
-        line = _re.sub(r"^\*+(\d+)[.)]\*+\s*", r"\1. ", line)
-        m = _re.match(r"^(\d+)[.)]\s*(.*)", line)
+        normalized = _re.sub(r"^\*+(\d+)[.)]\*+\s*", r"\1. ", stripped)
+        m = _re.match(r"^(\d+)[.)]\s*(.*)", normalized)
         if m:
             idx = int(m.group(1))
             val = m.group(2).strip()
-            if val:  # Chỉ lưu nếu có nội dung thực
+            if val:
                 parsed[idx] = val
+                last_idx = idx
+        elif last_idx is not None and last_idx in parsed:
+            # Dòng tiếp nối (bản dịch xuống dòng) — gộp vào segment trước
+            parsed[last_idx] = parsed[last_idx] + "\n" + stripped
 
     logger.info("AI batch parsed %d/%d items", len(parsed), len(texts))
     if len(parsed) < len(texts):
@@ -450,6 +464,11 @@ async def save_translation_to_cache(
     Chỉ ghi đè khi nguồn mới có ưu tiên >= nguồn hiện tại: proofread > direct > file.
     """
     if not translated:
+        return
+    # Không lưu cache khi bản dịch trả về đúng bản gốc (tránh lưu bản dịch "giả")
+    orig_stripped = (text or "").strip()
+    trans_stripped = (translated or "").strip()
+    if orig_stripped and trans_stripped and orig_stripped == trans_stripped:
         return
     origin = (origin or CACHE_ORIGIN_DIRECT).strip() or CACHE_ORIGIN_DIRECT
     key = _cache_key(source_lang, target_lang, text)
@@ -557,6 +576,9 @@ _PROOFREAD_SYSTEM_PROMPT = (
     "Bạn là một dịch giả và hiệu đính viên {source_lang} chuyên nghiệp. "
     "Hãy xem xét bản dịch được cung cấp và cải thiện nếu cần thiết. "
     "Ngôn ngữ nguồn: {source_lang}. Ngôn ngữ đích: {target_lang}. "
+    "Trong văn bản có thể xuất hiện các placeholder đặc biệt dưới dạng __PH_0__, __PH_1__, ... "
+    "Đây là các thẻ/ký hiệu kỹ thuật (ví dụ: thẻ HTML như <br>) đã được ẩn đi. "
+    "Bạn PHẢI giữ nguyên, không xóa, không thay đổi thứ tự hay nội dung các placeholder này. "
     "Chỉ trả về bản dịch đã được cải thiện. "
     "Nếu bản dịch đã chính xác và tự nhiên, hãy trả về nguyên văn. "
     "Không giải thích, không thêm nhận xét hay ghi chú."
@@ -566,6 +588,9 @@ _PROOFREAD_BATCH_SYSTEM_PROMPT = (
     "Bạn là một dịch giả và hiệu đính viên {source_lang} chuyên nghiệp. "
     "Hãy xem xét và cải thiện các bản dịch sau đây. "
     "Ngôn ngữ nguồn: {source_lang}. Ngôn ngữ đích: {target_lang}. "
+    "Trong văn bản có thể xuất hiện các placeholder đặc biệt dưới dạng __PH_0__, __PH_1__, ... "
+    "Đây là các thẻ/ký hiệu kỹ thuật (ví dụ: thẻ HTML như <br>) đã được ẩn đi. "
+    "Bạn PHẢI giữ nguyên, không xóa, không thay đổi thứ tự hay nội dung các placeholder này. "
     "Với mỗi mục được đánh số bạn nhận được:\n"
     "  Original: <văn bản gốc>\n"
     "  Current: <bản dịch hiện tại>\n"
@@ -700,6 +725,7 @@ async def proofread_with_ai_batch(
             config=types.GenerateContentConfig(
                 system_instruction=system_content,
                 temperature=0.3,
+                max_output_tokens=TRANSLATE_BATCH_MAX_OUTPUT_TOKENS,
             ),
         )
         raw_output = (response.text or "").strip()
@@ -712,12 +738,20 @@ async def proofread_with_ai_batch(
 
     import re as _re
     parsed: Dict[int, str] = {}
+    last_idx: Optional[int] = None
     for line in raw_output.splitlines():
-        line = line.strip()
-        m = _re.match(r"^(\d+)\.\s*(.*)", line)
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = _re.match(r"^(\d+)\.\s*(.*)", stripped)
         if m:
             idx = int(m.group(1))
-            parsed[idx] = m.group(2).strip()
+            val = m.group(2).strip()
+            if val:
+                parsed[idx] = val
+                last_idx = idx
+        elif last_idx is not None and last_idx in parsed:
+            parsed[last_idx] = parsed[last_idx] + "\n" + stripped
 
     results = []
     for i, item in enumerate(items):

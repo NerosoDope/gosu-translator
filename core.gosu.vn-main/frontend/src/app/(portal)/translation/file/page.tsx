@@ -8,6 +8,7 @@ import type { QualityCheckResult } from '@/lib/api';
 import { authStore } from '@/lib/auth';
 import type { TranslateStreamProgressEvent } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
+import { generateJobCode, JOB_CODE_PREFIX } from '@/lib/jobCode';
 
 // ── Step-5 Proofread types ────────────────────────────────────────────────────
 type S5Status = 'original' | 'edited' | 'ai-proofread' | 'loading';
@@ -56,6 +57,10 @@ export default function TranslationFilePage() {
   const [progress, setProgress] = useState<TranslateStreamProgressEvent | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** Job id khi dịch file (bước 4): tạo lúc bắt đầu, cập nhật completed/cancelled/failed khi xong hoặc hủy */
+  const translateJobIdRef = useRef<number | null>(null);
+  /** Đặt true khi user bấm Hủy (để không chuyển step 5 khi request JSON/XML vẫn hoàn thành sau đó) */
+  const translateCancelledByUserRef = useRef(false);
   /** Ngôn ngữ nguồn từ Quản lý ngôn ngữ */
   const [sourceLanguageOptions, setSourceLanguageOptions] = useState<LanguageItem[]>([]);
   /** Map sourceCode -> danh sách ngôn ngữ đích (từ cặp ngôn ngữ) */
@@ -73,6 +78,52 @@ export default function TranslationFilePage() {
   const [translatedDocxB64, setTranslatedDocxB64] = useState<string | null>(null);
   /** Nội dung XML đã dịch (bước 5 xem trước + nút Tải File) */
   const [translatedXmlContent, setTranslatedXmlContent] = useState<string | null>(null);
+  /** Nội dung gốc JSON/XML (lưu khi bắt đầu dịch) để bước 5 xem trước cũ vs mới */
+  const [originalJsonContent, setOriginalJsonContent] = useState<string | null>(null);
+  const [originalXmlContent, setOriginalXmlContent] = useState<string | null>(null);
+  /** Chế độ hiệu đính XML: bảng rows theo cột, có thể sửa rồi lưu lại thành XML */
+  const [xmlProofreadMode, setXmlProofreadMode] = useState(false);
+  const [xmlProofreadRows, setXmlProofreadRows] = useState<Record<string, string>[]>([]);
+  const [xmlProofreadColumns, setXmlProofreadColumns] = useState<string[]>([]);
+  /** Toàn bộ cột từ XML (để gửi rebuild); hiển thị chỉ dùng xmlProofreadColumns = cột được chọn dịch */
+  const [xmlProofreadAllColumns, setXmlProofreadAllColumns] = useState<string[]>([]);
+  const [xmlProofreadMeta, setXmlProofreadMeta] = useState<{ root_tag: string; row_tag: string; root_attribs: Record<string, string>; declaration: string } | null>(null);
+  const [xmlProofreadLoading, setXmlProofreadLoading] = useState(false);
+  const [xmlProofreadSearch, setXmlProofreadSearch] = useState('');
+  const [xmlProofreadFind, setXmlProofreadFind] = useState('');
+  const [xmlProofreadReplace, setXmlProofreadReplace] = useState('');
+  const [xmlProofreadSelectAll, setXmlProofreadSelectAll] = useState(false);
+  const [xmlProofreadSelected, setXmlProofreadSelected] = useState<Set<number>>(new Set());
+  const [xmlProofreadAiLoadingFlatIndex, setXmlProofreadAiLoadingFlatIndex] = useState<number | null>(null);
+  /** Trạng thái từng ô hiệu đính XML (giống Excel): key = `${rowIndex}-${col}` */
+  const [xmlProofreadStatus, setXmlProofreadStatus] = useState<Record<string, S5Status>>({});
+  const [xmlProofreadBatchLoading, setXmlProofreadBatchLoading] = useState(false);
+  /** Xem trước kết quả XML dạng bảng (cột + dòng như Excel), load khi có translatedXmlContent */
+  const [xmlPreviewColumns, setXmlPreviewColumns] = useState<string[]>([]);
+  const [xmlPreviewRows, setXmlPreviewRows] = useState<Record<string, string>[]>([]);
+  const [xmlPreviewLoading, setXmlPreviewLoading] = useState(false);
+  /** Hàng gốc XML (parse từ originalXmlContent) để bước 5 so sánh cũ vs mới */
+  const [xmlOriginalRows, setXmlOriginalRows] = useState<Record<string, string>[]>([]);
+  const [xmlOriginalLoading, setXmlOriginalLoading] = useState(false);
+  /** Xem trước JSON bước 5: bảng nội dung cũ vs mới (columns + rows từ parse) */
+  const [jsonPreviewColumns, setJsonPreviewColumns] = useState<string[]>([]);
+  const [jsonPreviewOrigRows, setJsonPreviewOrigRows] = useState<Record<string, string>[]>([]);
+  const [jsonPreviewTransRows, setJsonPreviewTransRows] = useState<Record<string, string>[]>([]);
+  const [jsonPreviewLoading, setJsonPreviewLoading] = useState(false);
+  /** Chế độ hiệu đính JSON: bảng rows có thể sửa, lưu thay thế translatedJsonContent */
+  const [jsonProofreadMode, setJsonProofreadMode] = useState(false);
+  const [jsonProofreadRows, setJsonProofreadRows] = useState<Record<string, string>[]>([]);
+  const [jsonProofreadColumns, setJsonProofreadColumns] = useState<string[]>([]);
+  const [jsonProofreadLoading, setJsonProofreadLoading] = useState(false);
+  const [jsonProofreadSearch, setJsonProofreadSearch] = useState('');
+  const [jsonProofreadFind, setJsonProofreadFind] = useState('');
+  const [jsonProofreadReplace, setJsonProofreadReplace] = useState('');
+  const [jsonProofreadSelectAll, setJsonProofreadSelectAll] = useState(false);
+  const [jsonProofreadSelected, setJsonProofreadSelected] = useState<Set<number>>(new Set());
+  const [jsonProofreadAiLoadingFlatIndex, setJsonProofreadAiLoadingFlatIndex] = useState<number | null>(null);
+  /** Trạng thái từng ô hiệu đính JSON (giống Excel): key = `${rowIndex}-${col}` */
+  const [jsonProofreadStatus, setJsonProofreadStatus] = useState<Record<string, S5Status>>({});
+  const [jsonProofreadBatchLoading, setJsonProofreadBatchLoading] = useState(false);
 
   // ── Step-5 Proofread state ────────────────────────────────────────────────
   const [s5Rows, setS5Rows] = useState<S5Row[]>([]);
@@ -90,7 +141,14 @@ export default function TranslationFilePage() {
   const [s5QualityScores, setS5QualityScores] = useState<Record<number, QualityCheckResult>>({});
   const [s5QualityLoading, setS5QualityLoading] = useState(false);
   const [s5QualityExpanded, setS5QualityExpanded] = useState<number | null>(null);
-  const [s5RetranslateLoadingIds, setS5RetranslateLoadingIds] = useState<Set<number>>(new Set());
+  /** Quality check cho bước 5 JSON — giống Excel: 1 điểm/dòng, key = row id (1-based) */
+  const [jsonQualityScores, setJsonQualityScores] = useState<Record<number, QualityCheckResult>>({});
+  const [jsonQualityLoading, setJsonQualityLoading] = useState(false);
+  const [jsonQualityExpandedRowId, setJsonQualityExpandedRowId] = useState<number | null>(null);
+  /** Quality check cho bước 5 XML — giống Excel: 1 điểm/dòng, key = row id (1-based) */
+  const [xmlQualityScores, setXmlQualityScores] = useState<Record<number, QualityCheckResult>>({});
+  const [xmlQualityLoading, setXmlQualityLoading] = useState(false);
+  const [xmlQualityExpandedRowId, setXmlQualityExpandedRowId] = useState<number | null>(null);
 
   // ── Config Step 3 ────────────────────────────────────────────────────────
   const [translateStyle, setTranslateStyle] = useState('');
@@ -168,14 +226,210 @@ export default function TranslationFilePage() {
 
       const prompts = (pRes?.data ?? []).map((p: any) => ({ id: p.id, name: p.name, is_default: p.is_default }));
       setPromptOptions(prompts);
-      const defaultPrompt = prompts.find((p: any) => p.is_default);
-      if (defaultPrompt) setPromptId(defaultPrompt.id);
+      // Luôn mặc định chọn "Prompt mặc định" (không set promptId => backend dùng DEFAULT_SYSTEM_PROMPT)
     }).finally(() => {
       if (mounted) setLoadingConfig(false);
     });
 
     return () => { mounted = false; };
   }, []);
+
+  // Parse XML đã dịch thành bảng (cột + dòng) để xem trước dạng Excel
+  useEffect(() => {
+    if (!translatedXmlContent?.trim()) {
+      setXmlPreviewColumns([]);
+      setXmlPreviewRows([]);
+      return;
+    }
+    let cancelled = false;
+    setXmlPreviewLoading(true);
+    translateAPI
+      .parseXmlContent(translatedXmlContent)
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data as { columns?: string[]; rows?: Record<string, string>[] };
+        setXmlPreviewColumns(data.columns ?? []);
+        setXmlPreviewRows(data.rows ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setXmlPreviewColumns([]);
+          setXmlPreviewRows([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setXmlPreviewLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [translatedXmlContent]);
+
+  // Parse XML gốc thành bảng khi có originalXmlContent (bước 5 so sánh cũ / mới)
+  useEffect(() => {
+    if (!originalXmlContent?.trim()) {
+      setXmlOriginalRows([]);
+      return;
+    }
+    let cancelled = false;
+    setXmlOriginalLoading(true);
+    translateAPI
+      .parseXmlContent(originalXmlContent)
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data as { rows?: Record<string, string>[] };
+        setXmlOriginalRows(data.rows ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setXmlOriginalRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setXmlOriginalLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [originalXmlContent]);
+
+  // Parse JSON gốc + đã dịch thành bảng khi có translatedJsonContent (bước 5 xem trước cũ vs mới)
+  useEffect(() => {
+    if (!translatedJsonContent?.trim()) {
+      setJsonPreviewColumns([]);
+      setJsonPreviewOrigRows([]);
+      setJsonPreviewTransRows([]);
+      return;
+    }
+    let cancelled = false;
+    setJsonPreviewLoading(true);
+    const load = async () => {
+      try {
+        const [transRes, origRes] = await Promise.all([
+          translateAPI.parseJsonContent(translatedJsonContent),
+          originalJsonContent?.trim()
+            ? translateAPI.parseJsonContent(originalJsonContent)
+            : Promise.resolve({ data: { columns: [] as string[], rows: [] as Record<string, string>[] } }),
+        ]);
+        if (cancelled) return;
+        const transData = transRes.data as { columns: string[]; rows: Record<string, string>[] };
+        const origData = origRes.data as { columns: string[]; rows: Record<string, string>[] };
+        setJsonPreviewColumns(transData.columns ?? []);
+        setJsonPreviewTransRows(transData.rows ?? []);
+        setJsonPreviewOrigRows(origData.rows ?? []);
+      } catch {
+        if (!cancelled) {
+          setJsonPreviewColumns([]);
+          setJsonPreviewOrigRows([]);
+          setJsonPreviewTransRows([]);
+        }
+      } finally {
+        if (!cancelled) setJsonPreviewLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [translatedJsonContent, originalJsonContent]);
+
+  // Chạy quality check cho JSON — logic giống Excel: 1 điểm/dòng, dùng cột đầu tiên đã chọn
+  useEffect(() => {
+    if (
+      jsonPreviewOrigRows.length === 0 ||
+      jsonPreviewTransRows.length === 0 ||
+      jsonPreviewColumns.length === 0 ||
+      !sourceLang ||
+      !targetLang
+    ) {
+      setJsonQualityScores({});
+      return;
+    }
+    const colsToScore = columns.filter((c) => selectedColumns[c]).filter((c) => jsonPreviewColumns.includes(c));
+    const col = (colsToScore.length > 0 ? colsToScore : jsonPreviewColumns)[0];
+    const items: { id: number; original: string; translated: string }[] = [];
+    const n = Math.min(jsonPreviewOrigRows.length, jsonPreviewTransRows.length);
+    for (let rowIndex = 0; rowIndex < n; rowIndex++) {
+      const orig = (jsonPreviewOrigRows[rowIndex] ?? {})[col] ?? '';
+      const trans = (jsonPreviewTransRows[rowIndex] ?? {})[col] ?? '';
+      if (orig.trim() !== '') {
+        items.push({ id: rowIndex + 1, original: orig, translated: trans });
+      }
+    }
+    if (items.length === 0) {
+      setJsonQualityScores({});
+      return;
+    }
+    let cancelled = false;
+    setJsonQualityLoading(true);
+    qualityCheckAPI
+      .checkBatch({
+        items: items.map((r) => ({
+          source: r.original,
+          translated: r.translated,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+        })),
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const map: Record<number, QualityCheckResult> = {};
+        res.data.results.forEach((result, idx) => {
+          if (items[idx]) map[items[idx].id] = result;
+        });
+        setJsonQualityScores(map);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setJsonQualityLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [jsonPreviewOrigRows, jsonPreviewTransRows, jsonPreviewColumns, columns, selectedColumns, sourceLang, targetLang]);
+
+  // Chạy quality check cho XML — logic giống Excel: 1 điểm/dòng, dùng cột đầu tiên đã chọn
+  useEffect(() => {
+    if (
+      xmlOriginalRows.length === 0 ||
+      xmlPreviewRows.length === 0 ||
+      xmlPreviewColumns.length === 0 ||
+      !sourceLang ||
+      !targetLang
+    ) {
+      setXmlQualityScores({});
+      return;
+    }
+    const colsToScore = columns.filter((c) => selectedColumns[c]).filter((c) => xmlPreviewColumns.includes(c));
+    const col = (colsToScore.length > 0 ? colsToScore : xmlPreviewColumns)[0];
+    const items: { id: number; original: string; translated: string }[] = [];
+    const n = Math.min(xmlOriginalRows.length, xmlPreviewRows.length);
+    for (let rowIndex = 0; rowIndex < n; rowIndex++) {
+      const orig = (xmlOriginalRows[rowIndex] ?? {})[col] ?? '';
+      const trans = (xmlPreviewRows[rowIndex] ?? {})[col] ?? '';
+      if (orig.trim() !== '') {
+        items.push({ id: rowIndex + 1, original: orig, translated: trans });
+      }
+    }
+    if (items.length === 0) {
+      setXmlQualityScores({});
+      return;
+    }
+    let cancelled = false;
+    setXmlQualityLoading(true);
+    qualityCheckAPI
+      .checkBatch({
+        items: items.map((r) => ({
+          source: r.original,
+          translated: r.translated,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+        })),
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const map: Record<number, QualityCheckResult> = {};
+        res.data.results.forEach((result, idx) => {
+          if (items[idx]) map[items[idx].id] = result;
+        });
+        setXmlQualityScores(map);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setXmlQualityLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [xmlOriginalRows, xmlPreviewRows, xmlPreviewColumns, columns, selectedColumns, sourceLang, targetLang]);
 
   const targetOptions = targetOptionsBySource[sourceLang] ?? [];
 
@@ -240,8 +494,8 @@ export default function TranslationFilePage() {
   };
 
   const selectedCount = Object.values(selectedColumns).filter(Boolean).length;
-  // JSON/XML: không cần chọn cột → luôn cho qua; CSV/XLSX/DOCX: cần chọn ít nhất 1
-  const canGoStep3 = isTreeFile || selectedCount > 0;
+  // Mọi định dạng (CSV, XLSX, JSON, XML, DOCX): cần chọn ít nhất 1 cột để dịch
+  const canGoStep3 = selectedCount > 0;
   // Step 3: cần chọn đủ ngôn ngữ nguồn + đích và khác nhau
   const canStartTranslate = !!sourceLang && !!targetLang && sourceLang !== targetLang && !loading;
 
@@ -324,7 +578,7 @@ export default function TranslationFilePage() {
     try {
       const user = await authStore.getCurrentUser();
       if (!user?.id) { toast.error('Vui lòng đăng nhập để lưu vào Jobs.'); return; }
-      const jobCode = `${jobType.toUpperCase()}-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const jobCode = generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE);
       await jobAPI.create({
         job_code: jobCode,
         job_type: jobType,
@@ -334,6 +588,7 @@ export default function TranslationFilePage() {
         source_lang: sourceLang || null,
         target_lang: targetLang || null,
         payload: {
+          source_type: 'file',
           filename: file?.name ?? null,
           total_rows: previewRows.length,
           source_lang: sourceLang,
@@ -377,37 +632,6 @@ export default function TranslationFilePage() {
       setS5QualityLoading(false);
     }
   }, [s5Rows, sourceLang, targetLang, toast]);
-
-  /** Dịch lại 1 dòng chất lượng thấp bằng AI (fresh translate, không dùng cache). */
-  const s5RetranslateRow = useCallback(async (id: number) => {
-    const row = s5Rows.find((r) => r.id === id);
-    if (!row || !sourceLang || !targetLang) return;
-    setS5RetranslateLoadingIds((prev) => new Set(prev).add(id));
-    try {
-      const res = await translateAPI.translate({
-        text: row.original,
-        source_lang: sourceLang,
-        target_lang: targetLang,
-        prompt_id: promptId,
-        context: translateContext || null,
-        style: translateStyle || null,
-      });
-      const newTranslated = res.data.translated_text ?? row.translated;
-      setS5Rows((prev) => prev.map((r) => r.id === id ? { ...r, translated: newTranslated, status: 'edited' } : r));
-      // Re-check quality for this single row
-      const qres = await qualityCheckAPI.check({
-        source: row.original,
-        translated: newTranslated,
-        source_lang: sourceLang,
-        target_lang: targetLang,
-      });
-      setS5QualityScores((prev) => ({ ...prev, [id]: qres.data }));
-    } catch (err: any) {
-      toast.error(err?.response?.data?.detail ?? 'Dịch lại thất bại.');
-    } finally {
-      setS5RetranslateLoadingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
-    }
-  }, [s5Rows, sourceLang, targetLang, promptId, translateContext, translateStyle, toast]);
 
   /** Build S5Rows từ previewRows khi dịch file xong. */
   const buildS5Rows = useCallback((rows: Record<string, string>[], srcLang?: string, tgtLang?: string, colsSelected?: string[]) => {
@@ -567,7 +791,7 @@ export default function TranslationFilePage() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dịch File</h1>
       </div>
       <p className="text-sm text-gray-600 dark:text-gray-400">
-        Tải lên và dịch file với nhiều định dạng (Excel, CSV, JSON, XML)
+        Tải lên và dịch file với nhiều định dạng (Excel, CSV, JSON, XML, DOCX)
       </p>
 
       {/* Stepper: màu theo tiến trình - đã qua (xanh lá), hiện tại (xanh dương), chưa tới (xám) */}
@@ -643,15 +867,15 @@ export default function TranslationFilePage() {
         </div>
       )}
 
-      {/* Step 2: Xem trước + (chỉ CSV/XLSX/DOCX) chọn cột */}
+      {/* Step 2: Xem trước + chọn cột (mọi định dạng: CSV, XLSX, JSON, XML, DOCX) */}
       {step === 2 && (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            {isTreeFile ? 'Xem Trước Nội Dung' : 'Xem Trước & Chọn Cột'}
+            Xem Trước & Chọn Cột
           </h2>
 
-          {/* ── Chọn cột thủ công: chỉ hiện với CSV/XLSX/DOCX ── */}
-          {!isTreeFile && (
+          {/* ── Chọn cột cần dịch: hiện với mọi định dạng khi có columns ── */}
+          {columns.length > 0 && (
             <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 p-4">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Chọn cột cần dịch</p>
@@ -716,7 +940,7 @@ export default function TranslationFilePage() {
           {/* ── Preview nội dung ── */}
           {columns.length > 0 && (
             previewHtml ? (
-              /* DOCX paragraph mode: render HTML giữ nguyên formatting */
+              /* DOCX: render HTML giữ nguyên định dạng */
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 overflow-hidden">
                 <p className="text-sm text-gray-500 dark:text-gray-400 px-4 pt-3 pb-1">
                   Xem trước nội dung (giữ nguyên định dạng)
@@ -733,7 +957,7 @@ export default function TranslationFilePage() {
                 />
               </div>
             ) : (
-              /* Bảng dữ liệu (mọi định dạng) */
+              /* JSON/XML/CSV/XLSX: bảng theo cột (giống nhau) */
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800">
                 <p className="text-sm text-gray-500 dark:text-gray-400 px-4 pt-3 pb-1">
                   Xem trước ({previewRows.length} dòng đầu tiên)
@@ -947,42 +1171,108 @@ export default function TranslationFilePage() {
             <Button
               onClick={async () => {
                 if (!file || !sourceLang || !targetLang || sourceLang === targetLang) return;
-                // ── JSON: auto-detect, structure-preserving, smart filter ──────
+                // ── JSON: dùng translate-file-stream như xlsx/csv, bắt buộc chọn cột ──────
                 if (isJsonFile) {
+                  const colsToTranslate = columns.filter((c) => selectedColumns[c]);
+                  if (colsToTranslate.length === 0) {
+                    toast.error('Vui lòng chọn ít nhất một cột cần dịch.');
+                    return;
+                  }
                   setStep(4);
                   setLoading(true);
+                  setProgress(null);
                   setJsonTranslatedDone(false);
                   setXmlTranslatedDone(false);
                   setTranslatedJsonContent(null);
+                  translateJobIdRef.current = null;
+                  translateCancelledByUserRef.current = false;
                   try {
-                    const res = await translateAPI.translateJsonFile({
-                      file,
-                      source_lang: sourceLang,
-                      target_lang: targetLang,
-                      smart_filter: true,
-                      translate_keys: false,
-                      prompt_id: promptId,
-                      context: translateContext || null,
-                      style: translateStyle || null,
-                      game_id: gameId,
-                      game_category_id: gameCategoryId,
-                    });
-                    const blob = res.data as Blob;
-                    const rawText = await blob.text();
-                    // Format JSON để hiển thị đẹp
-                    let formatted = rawText;
-                    try { formatted = JSON.stringify(JSON.parse(rawText), null, 2); } catch { /* noop */ }
-                    setTranslatedJsonContent(formatted);
+                    const origText = await file.text();
+                    setOriginalJsonContent(origText);
+                  } catch { /* noop */ }
+                  try {
+                    const user = await authStore.getCurrentUser();
+                    if (user?.id) {
+                      const jobRes = await jobAPI.create({
+                        job_code: generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE),
+                        job_type: 'translation',
+                        status: 'in_progress',
+                        progress: 0,
+                        user_id: user.id,
+                        source_lang: sourceLang,
+                        target_lang: targetLang,
+                        payload: { source_type: 'file', filename: file?.name ?? null, source_lang: sourceLang, target_lang: targetLang, selected_columns: colsToTranslate },
+                      });
+                      translateJobIdRef.current = jobRes.data?.id ?? null;
+                    }
+                  } catch (_) { /* tạo job thất bại vẫn dịch bình thường */ }
+                  abortRef.current = new AbortController();
+                  try {
+                    const done = await translateAPI.translateFileStream(
+                      {
+                        file,
+                        selected_columns: colsToTranslate,
+                        source_lang: sourceLang,
+                        target_lang: targetLang,
+                        prompt_id: promptId,
+                        context: translateContext || null,
+                        style: translateStyle || null,
+                        game_id: gameId,
+                        game_category_id: gameCategoryId,
+                      },
+                      (event) => {
+                        if (event.type === 'progress') setProgress(event as TranslateStreamProgressEvent);
+                      },
+                      abortRef.current.signal,
+                    );
+                    if (translateCancelledByUserRef.current) return;
+                    const translatedJson = done.translated_json ?? null;
+                    const formatted = translatedJson != null ? JSON.stringify(translatedJson, null, 2) : '';
+                    setTranslatedJsonContent(formatted || null);
                     setJsonTranslatedDone(true);
+                    setProgress(null);
+                    setPreviewRows(done.rows ?? []);
+                    setTranslatedJsonStructure(translatedJson);
                     try { localStorage.setItem('gosu_last_file_lang_pair', JSON.stringify({ source: sourceLang, target: targetLang })); } catch { /* noop */ }
                     setStep(5);
-                    toast.success('Dịch JSON xong. Xem trước bên dưới.');
+                    toast.success('Dịch file hoàn tất.');
+                    if (translateJobIdRef.current != null) {
+                      try {
+                        await jobAPI.update(translateJobIdRef.current, {
+                          status: 'completed',
+                          progress: 100,
+                          result: {
+                            total_rows: (done.rows ?? []).length,
+                            saved_at: new Date().toISOString(),
+                            translated_json: done.translated_json ?? null,
+                            output_columns: done.columns ?? null,
+                            rows: done.rows ?? null,
+                            filename: file?.name ?? null,
+                          },
+                        });
+                      } catch { /* noop */ }
+                      translateJobIdRef.current = null;
+                    }
                   } catch (err: any) {
-                    const msg = err.response?.data?.detail ?? err.message ?? 'Dịch file thất bại.';
-                    toast.error(Array.isArray(msg) ? msg.join(', ') : msg);
-                    setStep(3);
+                    if (err?.name === 'AbortError') {
+                      toast.error('Đã hủy dịch.');
+                      setStep(3);
+                      if (translateJobIdRef.current != null) {
+                        try { await jobAPI.cancel(translateJobIdRef.current); } catch { /* noop */ }
+                        translateJobIdRef.current = null;
+                      }
+                    } else {
+                      const msg = err?.response?.data?.detail ?? err?.message ?? 'Dịch file thất bại.';
+                      toast.error(Array.isArray(msg) ? msg.join(', ') : msg);
+                      setStep(3);
+                      if (translateJobIdRef.current != null) {
+                        try { await jobAPI.update(translateJobIdRef.current, { status: 'failed', error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
+                        translateJobIdRef.current = null;
+                      }
+                    }
                   } finally {
                     setLoading(false);
+                    abortRef.current = null;
                   }
                   return;
                 }
@@ -993,7 +1283,27 @@ export default function TranslationFilePage() {
                   setJsonTranslatedDone(false);
                   setXmlTranslatedDone(false);
                   setTranslatedXmlContent(null);
+                  translateJobIdRef.current = null;
+                  translateCancelledByUserRef.current = false;
                   try {
+                    const user = await authStore.getCurrentUser();
+                    if (user?.id) {
+                      const jobRes = await jobAPI.create({
+                        job_code: generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE),
+                        job_type: 'translation',
+                        status: 'in_progress',
+                        progress: 0,
+                        user_id: user.id,
+                        source_lang: sourceLang,
+                        target_lang: targetLang,
+                        payload: { source_type: 'file', filename: file?.name ?? null, source_lang: sourceLang, target_lang: targetLang },
+                      });
+                      translateJobIdRef.current = jobRes.data?.id ?? null;
+                    }
+                  } catch (_) { /* tạo job thất bại vẫn dịch bình thường */ }
+                  try {
+                    const origXmlText = await file.text();
+                    setOriginalXmlContent(origXmlText);
                     const res = await translateAPI.translateXmlFile({
                       file,
                       source_lang: sourceLang,
@@ -1007,17 +1317,36 @@ export default function TranslationFilePage() {
                       game_id: gameId,
                       game_category_id: gameCategoryId,
                     });
-                    const blob = res.data as Blob;
-                    const xmlText = await blob.text();
+                    const data = res.data;
+                    let xmlText = '';
+                    if (data instanceof ArrayBuffer) {
+                      xmlText = new TextDecoder('utf-8').decode(data);
+                    } else if (typeof data === 'string') {
+                      xmlText = data;
+                    } else if (data instanceof Blob) {
+                      xmlText = await data.text();
+                    } else if (data && typeof (data as Blob).arrayBuffer === 'function') {
+                      const ab = await (data as Blob).arrayBuffer();
+                      xmlText = new TextDecoder('utf-8').decode(ab);
+                    }
+                    if (translateCancelledByUserRef.current) return;
                     setTranslatedXmlContent(xmlText);
                     setXmlTranslatedDone(true);
                     try { localStorage.setItem('gosu_last_file_lang_pair', JSON.stringify({ source: sourceLang, target: targetLang })); } catch { /* noop */ }
                     setStep(5);
                     toast.success('Dịch XML xong. Xem trước bên dưới và tải file nếu cần.');
+                    if (translateJobIdRef.current != null) {
+                      try { await jobAPI.update(translateJobIdRef.current, { status: 'completed', progress: 100, result: { total_rows: 0, saved_at: new Date().toISOString() } }); } catch { /* noop */ }
+                      translateJobIdRef.current = null;
+                    }
                   } catch (err: any) {
                     const msg = err.response?.data?.detail ?? err.message ?? 'Dịch file thất bại.';
                     toast.error(Array.isArray(msg) ? msg.join(', ') : msg);
                     setStep(3);
+                    if (translateJobIdRef.current != null) {
+                      try { await jobAPI.update(translateJobIdRef.current, { status: 'failed', error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
+                      translateJobIdRef.current = null;
+                    }
                   } finally {
                     setLoading(false);
                   }
@@ -1035,6 +1364,24 @@ export default function TranslationFilePage() {
                 setJsonTranslatedDone(false);
                 setXmlTranslatedDone(false);
                 abortRef.current = new AbortController();
+                translateJobIdRef.current = null;
+                translateCancelledByUserRef.current = false;
+                try {
+                  const user = await authStore.getCurrentUser();
+                  if (user?.id) {
+                    const jobRes = await jobAPI.create({
+                      job_code: generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE),
+                      job_type: 'translation',
+                      status: 'in_progress',
+                      progress: 0,
+                      user_id: user.id,
+                      source_lang: sourceLang,
+                      target_lang: targetLang,
+                      payload: { source_type: 'file', filename: file?.name ?? null, source_lang: sourceLang, target_lang: targetLang, selected_columns: colsToTranslate },
+                    });
+                    translateJobIdRef.current = jobRes.data?.id ?? null;
+                  }
+                } catch (_) { /* tạo job thất bại vẫn dịch bình thường */ }
                 try {
                   const done = await translateAPI.translateFileStream(
                     {
@@ -1062,13 +1409,39 @@ export default function TranslationFilePage() {
                   try { localStorage.setItem('gosu_last_file_lang_pair', JSON.stringify({ source: sourceLang, target: targetLang })); } catch { /* noop */ }
                   setStep(5);
                   toast.success('Dịch file hoàn tất.');
+                  if (translateJobIdRef.current != null) {
+                    try {
+                      await jobAPI.update(translateJobIdRef.current, {
+                        status: 'completed',
+                        progress: 100,
+                        result: {
+                          total_rows: doneRows.length,
+                          saved_at: new Date().toISOString(),
+                          translated_docx_b64: done.translated_docx_b64 ?? null,
+                          translated_json: done.translated_json ?? null,
+                          output_columns: done.columns ?? null,
+                          rows: done.rows ?? null,
+                          filename: file?.name ?? null,
+                        },
+                      });
+                    } catch { /* noop */ }
+                    translateJobIdRef.current = null;
+                  }
                 } catch (err: any) {
                   if (err?.name === 'AbortError') {
                     toast.error('Đã hủy dịch.');
                     setStep(3);
+                    if (translateJobIdRef.current != null) {
+                      try { await jobAPI.cancel(translateJobIdRef.current); } catch { /* noop */ }
+                      translateJobIdRef.current = null;
+                    }
                   } else {
                     const msg = err?.message ?? 'Dịch file thất bại.';
                     toast.error(Array.isArray(msg) ? msg.join(', ') : msg);
+                    if (translateJobIdRef.current != null) {
+                      try { await jobAPI.update(translateJobIdRef.current, { status: 'failed', error_message: Array.isArray(msg) ? msg.join(', ') : msg }); } catch { /* noop */ }
+                      translateJobIdRef.current = null;
+                    }
                   }
                 } finally {
                   setLoading(false);
@@ -1083,30 +1456,26 @@ export default function TranslationFilePage() {
         </div>
       )}
 
-      {/* Step 4: Tiến trình */}
+      {/* Step 4: Tiến trình — thống nhất hiển thị cho mọi loại file (JSON/XML/CSV/XLSX/DOCX) */}
       {step === 4 && (
         <div className="space-y-5">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Tiến Trình Dịch Thuật</h2>
 
-          {/* JSON/XML: spinner đơn giản (không có batch progress) */}
+          {/* Phase label — chung cho mọi file */}
           {isTreeFile ? (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <svg className="animate-spin w-10 h-10 text-blue-500" fill="none" viewBox="0 0 24 24">
+            <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+              <svg className="animate-spin w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
               </svg>
-              <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
-                Đang phân tích cấu trúc và dịch tất cả chuỗi văn bản...
-                <br />
-                <span className="text-xs text-gray-400 dark:text-gray-500">Smart Filter đang lọc và bảo toàn giá trị kỹ thuật</span>
-              </p>
+              <span>
+                {isJsonFile ? 'Đang phân tích và dịch file JSON...' : 'Đang phân tích và dịch file XML...'}
+                <span className="text-gray-500 dark:text-gray-400 font-normal"> Smart Filter đang lọc và bảo toàn giá trị kỹ thuật.</span>
+              </span>
             </div>
-          ) : (
-            <>
-          {/* Phase label */}
-          {!progress ? (
+          ) : !progress ? (
             <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-              <svg className="animate-spin w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24">
+              <svg className="animate-spin w-4 h-4 shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
               </svg>
@@ -1114,7 +1483,7 @@ export default function TranslationFilePage() {
             </div>
           ) : (
             <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
-              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+              <svg className="animate-spin w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
               </svg>
@@ -1122,61 +1491,28 @@ export default function TranslationFilePage() {
             </div>
           )}
 
-          {/* Progress bar */}
-          <div>
-            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-              <span>
-                {progress
-                  ? `Batch ${progress.batch_done}/${progress.batch_total} · ${progress.done}/${progress.total} segment`
-                  : 'Khởi tạo...'}
-              </span>
-              <span className="font-medium text-gray-700 dark:text-gray-300">
-                {progress ? `${progress.percent}%` : '0%'}
-              </span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
-              <div
-                className="h-3 rounded-full transition-all duration-500 ease-out"
-                style={{
-                  width: `${progress ? progress.percent : 0}%`,
-                  background: 'linear-gradient(90deg, #3b82f6 0%, #6366f1 100%)',
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Batch detail cards */}
-          {progress && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[
-                { label: 'Segment đã dịch', value: `${progress.done} / ${progress.total}` },
-                { label: 'Batch đã gửi', value: `${progress.batch_done} / ${progress.batch_total}` },
-                { label: 'Segment/batch', value: String(progress.batch_size) },
-                { label: 'Token ước tính', value: `~${progress.batch_tokens}` },
-              ].map(({ label, value }) => (
-                <div key={label} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 text-center">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
-                  <p className="text-base font-semibold text-gray-900 dark:text-white mt-0.5">{value}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
           <p className="text-xs text-gray-400 dark:text-gray-500">
-            Nhiều dòng được gộp thành 1 batch để giảm chi phí API. Vui lòng không đóng trang này.
+            {isTreeFile
+              ? 'Đang phân tích cấu trúc và dịch toàn bộ nội dung. Vui lòng không đóng trang này.'
+              : 'Nhiều dòng được gộp thành 1 batch để giảm chi phí API. Vui lòng không đóng trang này.'}
           </p>
 
           <div className="flex justify-start">
             <Button
               variant="secondary"
-              onClick={() => { abortRef.current?.abort(); }}
+              onClick={() => {
+                translateCancelledByUserRef.current = true;
+                if (translateJobIdRef.current != null) {
+                  jobAPI.cancel(translateJobIdRef.current).catch(() => {});
+                  translateJobIdRef.current = null;
+                }
+                abortRef.current?.abort();
+              }}
               disabled={!loading}
             >
               Hủy
             </Button>
           </div>
-            </>
-          )}
         </div>
       )}
 
@@ -1187,6 +1523,13 @@ export default function TranslationFilePage() {
           setJsonTranslatedDone(false); setXmlTranslatedDone(false);
           setTranslatedJsonStructure(null); setTranslatedJsonContent(null);
           setTranslatedDocxB64(null); setTranslatedXmlContent(null);
+          setOriginalJsonContent(null); setOriginalXmlContent(null);
+          setXmlProofreadMode(false); setXmlProofreadRows([]); setXmlProofreadColumns([]); setXmlProofreadAllColumns([]); setXmlProofreadMeta(null);
+          setXmlPreviewColumns([]); setXmlPreviewRows([]); setXmlOriginalRows([]);
+          setJsonPreviewColumns([]); setJsonPreviewOrigRows([]); setJsonPreviewTransRows([]);
+          setJsonProofreadMode(false); setJsonProofreadRows([]); setJsonProofreadColumns([]);
+          setJsonQualityScores({}); setXmlQualityScores({});
+          setJsonQualityExpandedRowId(null); setXmlQualityExpandedRowId(null);
         };
 
         if (jsonTranslatedDone) {
@@ -1210,90 +1553,529 @@ export default function TranslationFilePage() {
               .then(() => toast.success('Đã sao chép nội dung JSON.'))
               .catch(() => toast.error('Không thể sao chép.'));
           };
-          // Đếm số key đã dịch (lines with ":")
-          const lineCount = translatedJsonContent ? translatedJsonContent.split('\n').length : 0;
-          return (
-            <div className="space-y-5">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Kết Quả Dịch JSON</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                    Cấu trúc gốc được bảo toàn · Chỉ dịch value chuỗi · Smart Filter đã áp dụng
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-full px-3 py-1">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  Dịch hoàn tất
-                </div>
-              </div>
+          const jsonColsToShow = (() => {
+            const selected = columns.filter((c) => selectedColumns[c]).filter((c) => jsonPreviewColumns.includes(c));
+            return selected.length > 0 ? selected : [...jsonPreviewColumns];
+          })();
 
-              {/* Stats */}
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { label: 'File gốc', value: file?.name ?? '—', sub: 'JSON' },
-                  { label: 'Tổng dòng', value: String(lineCount), sub: 'dòng' },
-                  { label: 'Ngôn ngữ', value: `${sourceLang} → ${targetLang}`, sub: 'Đích' },
-                ].map(({ label, value, sub }) => (
-                  <div key={label} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2.5 text-center">
-                    <p className="text-[11px] text-gray-400 dark:text-gray-500 uppercase tracking-wide">{label}</p>
-                    <p className="text-sm font-semibold text-gray-900 dark:text-white mt-0.5 truncate" title={value}>{value}</p>
-                    <p className="text-[10px] text-gray-400 dark:text-gray-500">{sub}</p>
-                  </div>
-                ))}
-              </div>
+          const enterJsonProofread = () => {
+            const displayCols = jsonColsToShow.flatMap((c) => [`${c} (gốc)`, `${c} (đã dịch)`]);
+            setJsonProofreadColumns(displayCols);
+            setJsonProofreadRows(
+              jsonPreviewTransRows.map((transRow, i) => {
+                const origRow = jsonPreviewOrigRows[i] ?? {};
+                const row: Record<string, string> = {};
+                jsonColsToShow.forEach((c) => {
+                  row[`${c} (gốc)`] = origRow[c] ?? '';
+                  row[`${c} (đã dịch)`] = transRow[c] ?? '';
+                });
+                return row;
+              })
+            );
+            setJsonProofreadStatus({});
+            setJsonProofreadMode(true);
+          };
+          const jsonProofreadBaseName = file?.name?.replace(/\.[^.]+$/, '') ?? 'proofread';
+          const downloadJsonProofreadJson = () => {
+            try {
+              const colsTrans = jsonProofreadColumns.filter((c) => c.endsWith(' (đã dịch)')).map((c) => c.replace(/ \(đã dịch\)$/, ''));
+              const newTransRows = jsonPreviewTransRows.map((r, i) => ({
+                ...r,
+                ...Object.fromEntries(colsTrans.map((c) => [c, jsonProofreadRows[i]?.[`${c} (đã dịch)`] ?? r[c]])),
+              }));
+              const content = JSON.stringify(newTransRows, null, 2);
+              const blob = new Blob([content], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${jsonProofreadBaseName}_proofread.json`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              toast.success('Đã tải file JSON.');
+            } catch (err: any) {
+              toast.error('Không thể xuất JSON.');
+            }
+          };
+          const updateJsonProofreadCell = (rowIndex: number, col: string, value: string) => {
+            setJsonProofreadRows((prev) => prev.map((r, i) => (i === rowIndex ? { ...r, [col]: value } : r)));
+            const key = `${rowIndex}-${col.replace(/ \(đã dịch\)$/, '')}`;
+            setJsonProofreadStatus((prev) => ({ ...prev, [key]: 'edited' }));
+          };
+          const jsonTransColsBase = jsonProofreadColumns.filter((c) => c.endsWith(' (đã dịch)')).map((c) => c.replace(/ \(đã dịch\)$/, ''));
+          const jsonProofreadFlatRows: { flatIndex: number; rowIndex: number; col: string; original: string; translated: string }[] = [];
+          let jsonFlatIdx = 0;
+          jsonProofreadRows.forEach((row, rowIndex) => {
+            jsonTransColsBase.forEach((col) => {
+              jsonProofreadFlatRows.push({
+                flatIndex: jsonFlatIdx++,
+                rowIndex,
+                col,
+                original: row[`${col} (gốc)`] ?? '',
+                translated: row[`${col} (đã dịch)`] ?? '',
+              });
+            });
+          });
+          const jsonProofreadReplaceAll = () => {
+            if (!jsonProofreadFind.trim()) { toast.error('Nhập nội dung cần tìm.'); return; }
+            const hasSelection = jsonProofreadSelected.size > 0;
+            const scopeFlat = hasSelection ? jsonProofreadSelected : new Set(jsonProofreadFlatRows.map((r) => r.flatIndex));
+            let count = 0;
+            const affectedStatusKeys: Record<string, S5Status> = {};
+            jsonProofreadFlatRows.forEach(({ flatIndex, rowIndex, col }) => {
+              if (!scopeFlat.has(flatIndex)) return;
+              const val = jsonProofreadRows[rowIndex]?.[`${col} (đã dịch)`] ?? '';
+              if (val.includes(jsonProofreadFind)) {
+                count += 1;
+                affectedStatusKeys[`${rowIndex}-${col}`] = 'edited';
+              }
+            });
+            if (count === 0) {
+              toast.error(hasSelection ? `Không tìm thấy "${jsonProofreadFind}" trong ${scopeFlat.size} dòng đã chọn.` : `Không tìm thấy "${jsonProofreadFind}" trong cột bản dịch.`);
+              return;
+            }
+            setJsonProofreadRows((prev) => {
+              const next = prev.map((r) => ({ ...r }));
+              jsonProofreadFlatRows.forEach(({ flatIndex, rowIndex, col }) => {
+                if (!scopeFlat.has(flatIndex)) return;
+                const key = `${col} (đã dịch)`;
+                const val = next[rowIndex][key] ?? '';
+                if (val.includes(jsonProofreadFind)) (next[rowIndex] as Record<string, string>)[key] = val.split(jsonProofreadFind).join(jsonProofreadReplace);
+              });
+              return next;
+            });
+            setJsonProofreadStatus((prev) => ({ ...prev, ...affectedStatusKeys }));
+            toast.success(hasSelection ? `Đã thay thế ${count} dòng trong ${scopeFlat.size} dòng đã chọn.` : `Đã thay thế ${count} dòng.`);
+          };
+          const jsonProofreadFlatFiltered = jsonProofreadSearch.trim()
+            ? jsonProofreadFlatRows.filter(
+                (r) =>
+                  r.original.toLowerCase().includes(jsonProofreadSearch.toLowerCase()) ||
+                  r.translated.toLowerCase().includes(jsonProofreadSearch.toLowerCase())
+              )
+            : jsonProofreadFlatRows;
+          const jsonProofreadFlatSelectAllFn = (checked: boolean) => {
+            setJsonProofreadSelectAll(checked);
+            setJsonProofreadSelected(checked ? new Set(jsonProofreadFlatFiltered.map((r) => r.flatIndex)) : new Set());
+          };
+          const jsonProofreadFlatSelect = (flatIndex: number, checked: boolean) => {
+            setJsonProofreadSelected((prev) => {
+              const next = new Set(prev);
+              if (checked) next.add(flatIndex);
+              else next.delete(flatIndex);
+              return next;
+            });
+          };
+          const jsonProofreadRowAi = async (flatIndex: number) => {
+            const item = jsonProofreadFlatRows.find((r) => r.flatIndex === flatIndex);
+            if (!item || !sourceLang || !targetLang) {
+              if (!sourceLang || !targetLang) toast.error('Vui lòng chọn ngôn ngữ để dùng AI hiệu đính.');
+              return;
+            }
+            const key = `${item.rowIndex}-${item.col}`;
+            setJsonProofreadStatus((prev) => ({ ...prev, [key]: 'loading' }));
+            setJsonProofreadAiLoadingFlatIndex(flatIndex);
+            try {
+              const res = await proofreadAPI.proofreadRow({
+                original: item.original,
+                translated: jsonProofreadRows[item.rowIndex]?.[`${item.col} (đã dịch)`] ?? item.translated,
+                source_lang: sourceLang,
+                target_lang: targetLang,
+              });
+              setJsonProofreadRows((prev) => prev.map((r, i) => (i === item.rowIndex ? { ...r, [`${item.col} (đã dịch)`]: res.data.proofread } : r)));
+              setJsonProofreadStatus((prev) => ({ ...prev, [key]: 'ai-proofread' }));
+            } catch (err: any) {
+              toast.error(err?.response?.data?.detail ?? 'Hiệu đính AI thất bại.');
+              setJsonProofreadStatus((prev) => ({ ...prev, [key]: 'original' }));
+            } finally {
+              setJsonProofreadAiLoadingFlatIndex(null);
+            }
+          };
+          const jsonProofreadBatchAi = async () => {
+            if (!sourceLang || !targetLang) { toast.error('Vui lòng chọn ngôn ngữ để dùng AI hiệu đính.'); return; }
+            const targets = jsonProofreadFlatFiltered.filter((r) => jsonProofreadSelected.has(r.flatIndex));
+            if (targets.length === 0) { toast.error('Chọn ít nhất 1 dòng để hiệu đính batch.'); return; }
+            setJsonProofreadStatus((prev) => {
+              const next = { ...prev };
+              targets.forEach((t) => { next[`${t.rowIndex}-${t.col}`] = 'loading'; });
+              return next;
+            });
+            setJsonProofreadBatchLoading(true);
+            try {
+              for (let i = 0; i < targets.length; i += S5_BATCH) {
+                const chunk = targets.slice(i, i + S5_BATCH);
+                const items = chunk.map((item) => ({
+                  index: item.flatIndex,
+                  original: item.original,
+                  translated: jsonProofreadRows[item.rowIndex]?.[`${item.col} (đã dịch)`] ?? item.translated,
+                }));
+                const res = await proofreadAPI.proofreadBatch({ items, source_lang: sourceLang, target_lang: targetLang });
+                const resultMap = Object.fromEntries((res.data.results ?? []).map((r) => [r.index, r.proofread]));
+                const rowsPatch: Record<number, Record<string, string>> = {};
+                const statusPatch: Record<string, S5Status> = {};
+                for (const item of chunk) {
+                  const proofread = resultMap[item.flatIndex];
+                  if (proofread === undefined) continue;
+                  if (!rowsPatch[item.rowIndex]) rowsPatch[item.rowIndex] = {};
+                  rowsPatch[item.rowIndex][`${item.col} (đã dịch)`] = proofread;
+                  statusPatch[`${item.rowIndex}-${item.col}`] = 'ai-proofread';
+                }
+                setJsonProofreadRows((prev) => prev.map((r, ri) => (rowsPatch[ri] ? { ...r, ...rowsPatch[ri] } : r)));
+                setJsonProofreadStatus((prev) => ({ ...prev, ...statusPatch }));
+              }
+              toast.success(`Đã hiệu đính ${targets.length} dòng bằng AI.`);
+              setJsonProofreadSelected(new Set());
+              setJsonProofreadSelectAll(false);
+            } catch (err: any) {
+              toast.error(err?.response?.data?.detail ?? 'Hiệu đính batch thất bại.');
+              setJsonProofreadStatus((prev) => {
+                const next: Record<string, S5Status> = { ...prev };
+                Object.keys(prev).forEach((k) => { if (prev[k] === 'loading') next[k] = 'original'; });
+                return next;
+              });
+            } finally {
+              setJsonProofreadBatchLoading(false);
+            }
+          };
 
-              {/* JSON Preview */}
-              <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono font-semibold text-gray-600 dark:text-gray-300">{baseName}_translated.json</span>
-                    <span className="text-[10px] text-gray-400 bg-gray-200 dark:bg-gray-700 rounded px-1.5 py-0.5">JSON</span>
+          if (jsonProofreadMode) {
+            return (
+              <div className="space-y-4">
+                {/* Header: Xem trước + Dịch Mới */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Hiệu Đính Kết Quả</h2>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                      {jsonProofreadFlatRows.length} dòng
+                      {(() => {
+                        const scores = Object.values(jsonQualityScores);
+                        const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b.score, 0) / scores.length) : null;
+                        return avg !== null ? (
+                          <span className={`ml-2 font-medium ${avg >= 85 ? 'text-green-600 dark:text-green-400' : avg >= 70 ? 'text-yellow-600 dark:text-yellow-400' : avg >= 60 ? 'text-orange-600 dark:text-orange-400' : 'text-red-600 dark:text-red-400'}`}>
+                            &bull; Chất lượng TB: {avg}/100
+                          </span>
+                        ) : null;
+                      })()}
+                    </p>
                   </div>
-                  <button
-                    onClick={copyToClipboard}
-                    className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  <div className="flex gap-2 flex-wrap">
+                    <button type="button" onClick={() => setJsonProofreadMode(false)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+                      Xem trước
+                    </button>
+                    <Button variant="secondary" onClick={resetAll}>Dịch Mới</Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Ngôn Ngữ Nguồn (AI hiệu đính)</label>
+                    <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                      <option value="">Chọn ngôn ngữ…</option>
+                      {sourceLanguageOptions.map((l) => <option key={l.id} value={l.code}>{getLanguageNameVi(l.code, l.name)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Ngôn Ngữ Đích (AI hiệu đính)</label>
+                    <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} disabled={!sourceLang} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-60">
+                      <option value="">Chọn ngôn ngữ…</option>
+                      {(targetOptionsBySource[sourceLang] ?? sourceLanguageOptions).map((l) => <option key={l.id} value={l.code}>{getLanguageNameVi(l.code, l.name)}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Toolbar tìm kiếm — 100% giống Excel */}
+                <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                  <div className="relative">
+                    <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z" />
                     </svg>
-                    Sao chép
-                  </button>
+                    <input type="text" placeholder="Tìm kiếm…" value={jsonProofreadSearch} onChange={(e) => setJsonProofreadSearch(e.target.value)} className="pl-8 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-64" />
+                  </div>
                 </div>
-                <div className="overflow-auto max-h-[420px] bg-gray-50 dark:bg-gray-900/60 p-4">
-                  <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all font-mono leading-relaxed">
-                    {translatedJsonContent ?? ''}
-                  </pre>
+
+                {/* Find & Replace — 100% giống Excel */}
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input type="text" placeholder="Nội dung cần thay thế…" value={jsonProofreadFind} onChange={(e) => setJsonProofreadFind(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && jsonProofreadReplaceAll()} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[140px] max-w-xs" />
+                    <input type="text" placeholder="Nội dung thay thế…" value={jsonProofreadReplace} onChange={(e) => setJsonProofreadReplace(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && jsonProofreadReplaceAll()} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[140px] max-w-xs" />
+                    <Button size="sm" variant="secondary" onClick={jsonProofreadReplaceAll}>
+                      {jsonProofreadSelected.size > 0 ? `Replace (${jsonProofreadSelected.size} dòng đã chọn)` : 'Replace tất cả'}
+                    </Button>
+                    {(jsonProofreadFind || jsonProofreadReplace) && <button type="button" onClick={() => { setJsonProofreadFind(''); setJsonProofreadReplace(''); }} className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">Xóa</button>}
+                  </div>
+                  {jsonProofreadSelected.size > 0 && (
+                    <Button size="sm" isLoading={jsonProofreadBatchLoading} disabled={jsonProofreadBatchLoading || !sourceLang || !targetLang} onClick={jsonProofreadBatchAi}>
+                      AI Hiệu Đính {jsonProofreadSelected.size} dòng đã chọn
+                    </Button>
+                  )}
+                </div>
+
+                {/* Bảng 100% giống Excel: wrapper overflow-hidden + overflow-x-auto */}
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700">
+                          <th className="px-4 py-3 w-10">
+                            <input type="checkbox" checked={jsonProofreadFlatFiltered.length > 0 && jsonProofreadFlatFiltered.every((r) => jsonProofreadSelected.has(r.flatIndex))} onChange={(e) => jsonProofreadFlatSelectAllFn(e.target.checked)} className="rounded border-gray-300 text-brand-600" />
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-10">#</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">GỐC</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">ĐÃ DỊCH</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-28">TRẠNG THÁI</th>
+                          {Object.keys(jsonQualityScores).length > 0 && (
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-20">ĐIỂM</th>
+                          )}
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">THAO TÁC</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
+                        {jsonProofreadFlatFiltered.length === 0 ? (
+                          <tr><td colSpan={Object.keys(jsonQualityScores).length > 0 ? 7 : 6} className="px-4 py-8 text-center text-gray-400 text-sm">{jsonProofreadSearch ? 'Không tìm thấy kết quả.' : 'Chưa có dữ liệu.'}</td></tr>
+                        ) : (
+                          jsonProofreadFlatFiltered.map((item, flatIdx) => {
+                            const isSelected = jsonProofreadSelected.has(item.flatIndex);
+                            const statusKey = `${item.rowIndex}-${item.col}`;
+                            const status: S5Status = jsonProofreadAiLoadingFlatIndex === item.flatIndex ? 'loading' : (jsonProofreadStatus[statusKey] ?? 'original');
+                            const badge = S5_BADGE[status];
+                            const isLoading = status === 'loading';
+                            const currentTranslated = jsonProofreadRows[item.rowIndex]?.[`${item.col} (đã dịch)`] ?? item.translated;
+                            const rowId = item.rowIndex + 1;
+                            const jsonQr = jsonQualityScores[rowId];
+                            const jsonColSpan = 6 + (Object.keys(jsonQualityScores).length > 0 ? 1 : 0);
+                            const isJsonExpanded = jsonQualityExpandedRowId === rowId;
+                            const isFirstFlatRowForDataRow = jsonProofreadFlatFiltered.findIndex((r) => r.rowIndex === item.rowIndex) === flatIdx;
+                            return (
+                              <React.Fragment key={item.flatIndex}>
+                                <tr className={`transition-colors ${isSelected ? 'bg-brand-50/40 dark:bg-brand-900/10' : 'bg-white dark:bg-gray-800 hover:bg-gray-50/80 dark:hover:bg-gray-700/20'}`}>
+                                  <td className="px-4 py-3">
+                                    <input type="checkbox" checked={isSelected} onChange={(e) => jsonProofreadFlatSelect(item.flatIndex, e.target.checked)} className="rounded border-gray-300 text-brand-600" />
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-400 font-mono text-xs align-top pt-4">{item.flatIndex + 1}</td>
+                                  <td className="px-4 py-3 text-gray-700 dark:text-gray-300 align-top max-w-[220px]">
+                                    <div className="break-words leading-relaxed text-xs">{item.original}</div>
+                                  </td>
+                                  <td className="px-4 py-3 align-top max-w-[280px]">
+                                    {isLoading ? (
+                                      <div className="flex items-center gap-2 text-gray-400 py-1 text-xs">
+                                        <svg className="animate-spin w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                                        Đang hiệu đính…
+                                      </div>
+                                    ) : (
+                                      <textarea
+                                        value={currentTranslated}
+                                        onChange={(e) => updateJsonProofreadCell(item.rowIndex, `${item.col} (đã dịch)`, e.target.value)}
+                                        rows={Math.max(2, Math.ceil(currentTranslated.length / 48))}
+                                        className={`w-full px-2 py-1.5 text-sm border rounded-lg resize-none transition-colors bg-transparent focus:outline-none text-gray-900 dark:text-gray-100 ${
+                                          status === 'ai-proofread' ? 'border-green-300 dark:border-green-700 bg-green-50/50 dark:bg-green-900/10'
+                                          : status === 'edited' ? 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10'
+                                          : 'border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-brand-400 focus:bg-white dark:focus:bg-gray-900'
+                                        }`}
+                                      />
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 align-top pt-4">
+                                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${badge.cls}`}>{badge.label}</span>
+                                  </td>
+                                  {Object.keys(jsonQualityScores).length > 0 && (
+                                    <td className="px-4 py-3 align-top pt-3">
+                                      {jsonQr ? (
+                                        <button
+                                          type="button"
+                                          title={`${jsonQr.verdict} · Click để xem chi tiết`}
+                                          onClick={() => setJsonQualityExpandedRowId(isJsonExpanded ? null : rowId)}
+                                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold cursor-pointer transition-opacity hover:opacity-80 ${getScoreBadgeCls(jsonQr.score)}`}
+                                        >
+                                          {jsonQr.score}
+                                          <svg className={`w-3 h-3 transition-transform ${isJsonExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                          </svg>
+                                        </button>
+                                      ) : (
+                                        <span className="text-xs text-gray-300 dark:text-gray-600">—</span>
+                                      )}
+                                    </td>
+                                  )}
+                                  <td className="px-4 py-3 align-top pt-3.5">
+                                    <button type="button" disabled={isLoading || jsonProofreadBatchLoading} onClick={() => jsonProofreadRowAi(item.flatIndex)} className="text-xs text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+                                      AI Hiệu Đính
+                                    </button>
+                                  </td>
+                                </tr>
+                                {isJsonExpanded && jsonQr && isFirstFlatRowForDataRow && (
+                                  <tr className="bg-gray-50 dark:bg-gray-900/40">
+                                    <td colSpan={jsonColSpan} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700/50">
+                                      <div className="space-y-2">
+                                        <div className="flex items-center gap-3">
+                                          <span className={`text-sm font-semibold ${getScoreBadgeCls(jsonQr.score)} px-2.5 py-0.5 rounded-full`}>
+                                            {jsonQr.score}/100 — {jsonQr.verdict}
+                                          </span>
+                                          {jsonQr.issues.length === 0 && (
+                                            <span className="text-xs text-green-600 dark:text-green-400">Không phát hiện vấn đề nào.</span>
+                                          )}
+                                        </div>
+                                        {jsonQr.issues.length > 0 && (
+                                          <ul className="space-y-1">
+                                            {jsonQr.issues.map((issue, i) => (
+                                              <li key={i} className="flex items-start gap-2 text-xs">
+                                                <span className={`shrink-0 font-semibold uppercase ${getSeverityCls(issue.severity)}`}>
+                                                  [{issue.severity === 'critical' ? 'Nghiêm trọng' : issue.severity === 'major' ? 'Quan trọng' : 'Nhỏ'}]
+                                                </span>
+                                                <span className="text-gray-700 dark:text-gray-300">{issue.message}</span>
+                                                {issue.suggestion && (
+                                                  <span className="text-gray-400 dark:text-gray-500 italic">→ {issue.suggestion}</span>
+                                                )}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        )}
+                                        {jsonQr.suggestions.length > 0 && (
+                                          <div className="text-xs text-blue-600 dark:text-blue-400 pt-1">
+                                            <span className="font-medium">Gợi ý: </span>
+                                            {jsonQr.suggestions[0]}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Footer 100% giống Excel: text + hai nút Tải File (.json / .csv) */}
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Tải xuống hoặc chỉnh sửa trước khi tải.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={downloadJsonProofreadJson}>
+                      <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                      Tải File .json
+                    </Button>
+                  </div>
                 </div>
               </div>
+            );
+          }
 
-              {/* Action buttons */}
-              <div className="flex gap-2 flex-wrap">
-                <Button
-                  onClick={downloadJsonFile}
-                  disabled={!translatedJsonContent}
-                >
-                  <svg className="w-4 h-4 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          const jsonDisplayColumns = jsonColsToShow.flatMap((c) => [`${c} (gốc)`, `${c} (đã dịch)`]);
+          const jsonMergedRows = jsonPreviewTransRows.map((transRow, i) => {
+            const origRow = jsonPreviewOrigRows[i] ?? {};
+            const merged: Record<string, string> = {};
+            jsonColsToShow.forEach((c) => {
+              merged[`${c} (gốc)`] = origRow[c] ?? '';
+              merged[`${c} (đã dịch)`] = transRow[c] ?? '';
+            });
+            return merged;
+          });
+
+          /* Bước 5 xem trước JSON — cấu trúc giống Excel (header + bảng chất lượng + nút) */
+          const jsonQScores = Object.values(jsonQualityScores);
+          const jsonQGood = jsonQScores.filter((q) => q.score >= 85).length;
+          const jsonQOk = jsonQScores.filter((q) => q.score >= 70 && q.score < 85).length;
+          const jsonQWarn = jsonQScores.filter((q) => q.score >= 60 && q.score < 70).length;
+          const jsonQBad = jsonQScores.filter((q) => q.score < 60).length;
+          const jsonQTotal = jsonQScores.length;
+          const jsonQualityAvg = jsonQTotal > 0
+            ? Math.round(jsonQScores.reduce((a, b) => a + b.score, 0) / jsonQTotal)
+            : null;
+
+          return (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Kết quả Dịch thuật</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  Đã dịch {jsonMergedRows.length} dòng
+                  {jsonQTotal > 0 && <> · {jsonQTotal} dòng đã kiểm tra chất lượng</>}
+                  {' · '}{sourceLang} → {targetLang}
+                </p>
+              </div>
+
+              {/* Quality summary panel (giống Excel) */}
+              {jsonQualityLoading && jsonQTotal === 0 && (
+                <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 flex items-center gap-3">
+                  <svg className="animate-spin w-5 h-5 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
                   </svg>
+                  <p className="text-sm text-blue-700 dark:text-blue-300">Đang kiểm tra chất lượng…</p>
+                </div>
+              )}
+              {jsonQTotal > 0 && (
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-4">
+                  <div className="flex items-center gap-6 flex-wrap">
+                    <div className="text-center min-w-[72px]">
+                      <div className={`text-4xl font-bold tabular-nums ${jsonQualityAvg !== null && jsonQualityAvg >= 85 ? 'text-green-600 dark:text-green-400' : jsonQualityAvg !== null && jsonQualityAvg >= 70 ? 'text-yellow-600 dark:text-yellow-400' : jsonQualityAvg !== null && jsonQualityAvg >= 60 ? 'text-orange-500 dark:text-orange-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {jsonQualityAvg}
+                      </div>
+                      <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Điểm TB / 100</div>
+                    </div>
+                    <div className="flex-1 min-w-[200px] space-y-1.5">
+                      {[
+                        { label: 'Tốt (≥85)', count: jsonQGood, color: 'bg-green-500', textCls: 'text-green-600 dark:text-green-400' },
+                        { label: 'Chấp nhận (70–84)', count: jsonQOk, color: 'bg-yellow-400', textCls: 'text-yellow-600 dark:text-yellow-400' },
+                        { label: 'Cần cải thiện (60–69)', count: jsonQWarn, color: 'bg-orange-400', textCls: 'text-orange-500 dark:text-orange-400' },
+                        { label: 'Cần dịch lại (<60)', count: jsonQBad, color: 'bg-red-500', textCls: 'text-red-600 dark:text-red-400' },
+                      ].map(({ label, count, color, textCls }) => (
+                        <div key={label} className="flex items-center gap-2 text-xs">
+                          <span className="w-36 text-gray-500 dark:text-gray-400 shrink-0">{label}</span>
+                          <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                            <div className={`h-2 rounded-full transition-all duration-500 ${color}`} style={{ width: jsonQTotal > 0 ? `${(count / jsonQTotal) * 100}%` : '0%' }} />
+                          </div>
+                          <span className={`w-8 text-right font-medium tabular-nums ${textCls}`}>{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {jsonPreviewLoading ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-gray-500 dark:text-gray-400 text-sm">
+                  <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                  Đang tải xem trước…
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-100 dark:bg-gray-800">
+                        {jsonDisplayColumns.map((k) => (
+                          <th key={k} className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">{k}</th>
+                        ))}
+                    </tr>
+                    </thead>
+                    <tbody>
+                      {jsonDisplayColumns.length > 0 && jsonMergedRows.length > 0 ? (
+                        jsonMergedRows.map((row, i) => (
+                          <tr key={i} className="border-t border-gray-200 dark:border-gray-700">
+                            {jsonDisplayColumns.map((k) => (
+                              <td key={k} className="px-4 py-2 text-gray-900 dark:text-gray-100 max-w-[200px] truncate align-top" title={String(row[k] ?? '')}>{row[k] ?? ''}</td>
+                            ))}
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan={jsonDisplayColumns.length || 1} className="px-4 py-8 text-center text-gray-400 text-sm">Chưa có dữ liệu xem trước.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="flex gap-2 flex-wrap">
+                <Button onClick={enterJsonProofread} disabled={jsonPreviewLoading || jsonPreviewTransRows.length === 0}>Hiệu Đính</Button>
+                <Button variant="secondary" onClick={downloadJsonFile} disabled={!translatedJsonContent}>
                   Tải File
                 </Button>
-                <Button variant="secondary" onClick={copyToClipboard} disabled={!translatedJsonContent}>
-                  <svg className="w-4 h-4 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  Sao chép JSON
-                </Button>
-                <Button variant="secondary" onClick={() => setStep(3)}>
-                  <svg className="w-4 h-4 mr-1.5 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Dịch Lại
-                </Button>
-                <Button variant="secondary" onClick={resetAll}>
-                  Dịch thuật Mới
-                </Button>
+                <Button variant="secondary" onClick={resetAll}>Dịch thuật Mới</Button>
               </div>
             </div>
           );
@@ -1313,28 +2095,536 @@ export default function TranslationFilePage() {
             URL.revokeObjectURL(url);
             toast.success('Đã tải file XML.');
           };
+          const xmlColsToShow = (() => {
+            const selected = columns.filter((c) => selectedColumns[c]).filter((c) => xmlPreviewColumns.includes(c));
+            return selected.length > 0 ? selected : [...xmlPreviewColumns];
+          })();
+
+          const enterXmlProofread = async () => {
+            if (!translatedXmlContent) return;
+            setXmlProofreadLoading(true);
+            try {
+              const res = await translateAPI.parseXmlContent(translatedXmlContent);
+              const data = res.data as { columns: string[]; rows: Record<string, string>[]; root_tag: string; row_tag: string; root_attribs: Record<string, string>; declaration: string };
+              const allCols = data.columns ?? [];
+              setXmlProofreadAllColumns(allCols);
+              setXmlProofreadColumns(xmlColsToShow);
+              setXmlProofreadRows(data.rows ?? []);
+              setXmlProofreadMeta({ root_tag: data.root_tag ?? 'root', row_tag: data.row_tag ?? 'row', root_attribs: data.root_attribs ?? {}, declaration: data.declaration ?? '' });
+              setXmlProofreadStatus({});
+              setXmlProofreadMode(true);
+            } catch (err: any) {
+              toast.error(err?.response?.data?.detail ?? 'Không thể phân tích XML để hiệu đính.');
+            } finally {
+              setXmlProofreadLoading(false);
+            }
+          };
+          const xmlProofreadBaseName = file?.name?.replace(/\.[^.]+$/, '') ?? 'proofread';
+          const downloadXmlProofreadXml = async () => {
+            if (!xmlProofreadMeta) return;
+            try {
+              const res = await translateAPI.rebuildXmlFromRows({
+                root_tag: xmlProofreadMeta.root_tag,
+                row_tag: xmlProofreadMeta.row_tag,
+                root_attribs: xmlProofreadMeta.root_attribs,
+                columns: xmlProofreadAllColumns.length > 0 ? xmlProofreadAllColumns : xmlProofreadColumns,
+                rows: xmlProofreadRows,
+                declaration: xmlProofreadMeta.declaration,
+              });
+              const content = (res.data as { content: string })?.content ?? '';
+              const blob = new Blob([content], { type: 'application/xml' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${xmlProofreadBaseName}_proofread.xml`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              toast.success('Đã tải file XML.');
+            } catch (err: any) {
+              toast.error(err?.response?.data?.detail ?? 'Không thể xuất XML.');
+            }
+          };
+          const updateXmlProofreadCell = (rowIndex: number, col: string, value: string) => {
+            setXmlProofreadRows((prev) => prev.map((r, i) => (i === rowIndex ? { ...r, [col]: value } : r)));
+            const key = `${rowIndex}-${col}`;
+            setXmlProofreadStatus((prev) => ({ ...prev, [key]: 'edited' }));
+          };
+          const xmlProofreadFlatRows: { flatIndex: number; rowIndex: number; col: string; original: string; translated: string }[] = [];
+          let xmlFlatIdx = 0;
+          xmlProofreadRows.forEach((row, rowIndex) => {
+            xmlColsToShow.forEach((col) => {
+              xmlProofreadFlatRows.push({
+                flatIndex: xmlFlatIdx++,
+                rowIndex,
+                col,
+                original: xmlOriginalRows[rowIndex]?.[col] ?? '',
+                translated: row[col] ?? '',
+              });
+            });
+          });
+          const xmlProofreadReplaceAll = () => {
+            if (!xmlProofreadFind.trim()) { toast.error('Nhập nội dung cần tìm.'); return; }
+            const hasSelection = xmlProofreadSelected.size > 0;
+            const scopeFlat = hasSelection ? xmlProofreadSelected : new Set(xmlProofreadFlatRows.map((r) => r.flatIndex));
+            let count = 0;
+            const affectedStatusKeys: Record<string, S5Status> = {};
+            xmlProofreadFlatRows.forEach(({ flatIndex, rowIndex, col }) => {
+              if (!scopeFlat.has(flatIndex)) return;
+              const val = xmlProofreadRows[rowIndex]?.[col] ?? '';
+              if (val.includes(xmlProofreadFind)) {
+                count += 1;
+                affectedStatusKeys[`${rowIndex}-${col}`] = 'edited';
+              }
+            });
+            if (count === 0) {
+              toast.error(hasSelection ? `Không tìm thấy "${xmlProofreadFind}" trong ${scopeFlat.size} dòng đã chọn.` : `Không tìm thấy "${xmlProofreadFind}" trong cột bản dịch.`);
+              return;
+            }
+            setXmlProofreadRows((prev) => {
+              const next = prev.map((r) => ({ ...r }));
+              xmlProofreadFlatRows.forEach(({ flatIndex, rowIndex, col }) => {
+                if (!scopeFlat.has(flatIndex)) return;
+                const val = next[rowIndex][col] ?? '';
+                if (val.includes(xmlProofreadFind)) next[rowIndex] = { ...next[rowIndex], [col]: val.split(xmlProofreadFind).join(xmlProofreadReplace) };
+              });
+              return next;
+            });
+            setXmlProofreadStatus((prev) => ({ ...prev, ...affectedStatusKeys }));
+            toast.success(hasSelection ? `Đã thay thế ${count} dòng trong ${scopeFlat.size} dòng đã chọn.` : `Đã thay thế ${count} dòng.`);
+          };
+          const xmlProofreadFlatFiltered = xmlProofreadSearch.trim()
+            ? xmlProofreadFlatRows.filter(
+                (r) =>
+                  r.original.toLowerCase().includes(xmlProofreadSearch.toLowerCase()) ||
+                  r.translated.toLowerCase().includes(xmlProofreadSearch.toLowerCase())
+              )
+            : xmlProofreadFlatRows;
+          const xmlProofreadFlatSelectAllFn = (checked: boolean) => {
+            setXmlProofreadSelectAll(checked);
+            setXmlProofreadSelected(checked ? new Set(xmlProofreadFlatFiltered.map((r) => r.flatIndex)) : new Set());
+          };
+          const xmlProofreadFlatSelect = (flatIndex: number, checked: boolean) => {
+            setXmlProofreadSelected((prev) => {
+              const next = new Set(prev);
+              if (checked) next.add(flatIndex);
+              else next.delete(flatIndex);
+              return next;
+            });
+          };
+          const xmlProofreadRowAi = async (flatIndex: number) => {
+            const item = xmlProofreadFlatRows.find((r) => r.flatIndex === flatIndex);
+            if (!item || !sourceLang || !targetLang) {
+              if (!sourceLang || !targetLang) toast.error('Vui lòng chọn ngôn ngữ để dùng AI hiệu đính.');
+              return;
+            }
+            const key = `${item.rowIndex}-${item.col}`;
+            setXmlProofreadStatus((prev) => ({ ...prev, [key]: 'loading' }));
+            setXmlProofreadAiLoadingFlatIndex(flatIndex);
+            try {
+              const currentTrans = xmlProofreadRows[item.rowIndex]?.[item.col] ?? item.translated;
+              const res = await proofreadAPI.proofreadRow({
+                original: item.original,
+                translated: currentTrans,
+                source_lang: sourceLang,
+                target_lang: targetLang,
+              });
+              setXmlProofreadRows((prev) => prev.map((r, i) => (i === item.rowIndex ? { ...r, [item.col]: res.data.proofread } : r)));
+              setXmlProofreadStatus((prev) => ({ ...prev, [key]: 'ai-proofread' }));
+            } catch (err: any) {
+              toast.error(err?.response?.data?.detail ?? 'Hiệu đính AI thất bại.');
+              setXmlProofreadStatus((prev) => ({ ...prev, [key]: 'original' }));
+            } finally {
+              setXmlProofreadAiLoadingFlatIndex(null);
+            }
+          };
+          const xmlProofreadBatchAi = async () => {
+            if (!sourceLang || !targetLang) { toast.error('Vui lòng chọn ngôn ngữ để dùng AI hiệu đính.'); return; }
+            const targets = xmlProofreadFlatFiltered.filter((r) => xmlProofreadSelected.has(r.flatIndex));
+            if (targets.length === 0) { toast.error('Chọn ít nhất 1 dòng để hiệu đính batch.'); return; }
+            setXmlProofreadStatus((prev) => {
+              const next = { ...prev };
+              targets.forEach((t) => { next[`${t.rowIndex}-${t.col}`] = 'loading'; });
+              return next;
+            });
+            setXmlProofreadBatchLoading(true);
+            try {
+              for (let i = 0; i < targets.length; i += S5_BATCH) {
+                const chunk = targets.slice(i, i + S5_BATCH);
+                const items = chunk.map((item) => ({
+                  index: item.flatIndex,
+                  original: item.original,
+                  translated: xmlProofreadRows[item.rowIndex]?.[item.col] ?? item.translated,
+                }));
+                const res = await proofreadAPI.proofreadBatch({ items, source_lang: sourceLang, target_lang: targetLang });
+                const resultMap = Object.fromEntries((res.data.results ?? []).map((r) => [r.index, r.proofread]));
+                const rowsPatch: Record<number, Record<string, string>> = {};
+                const statusPatch: Record<string, S5Status> = {};
+                for (const item of chunk) {
+                  const proofread = resultMap[item.flatIndex];
+                  if (proofread === undefined) continue;
+                  if (!rowsPatch[item.rowIndex]) rowsPatch[item.rowIndex] = {};
+                  rowsPatch[item.rowIndex][item.col] = proofread;
+                  statusPatch[`${item.rowIndex}-${item.col}`] = 'ai-proofread';
+                }
+                setXmlProofreadRows((prev) => prev.map((r, ri) => (rowsPatch[ri] ? { ...r, ...rowsPatch[ri] } : r)));
+                setXmlProofreadStatus((prev) => ({ ...prev, ...statusPatch }));
+              }
+              toast.success(`Đã hiệu đính ${targets.length} dòng bằng AI.`);
+              setXmlProofreadSelected(new Set());
+              setXmlProofreadSelectAll(false);
+            } catch (err: any) {
+              toast.error(err?.response?.data?.detail ?? 'Hiệu đính batch thất bại.');
+              setXmlProofreadStatus((prev) => {
+                const next: Record<string, S5Status> = { ...prev };
+                Object.keys(prev).forEach((k) => { if (prev[k] === 'loading') next[k] = 'original'; });
+                return next;
+              });
+            } finally {
+              setXmlProofreadBatchLoading(false);
+            }
+          };
+
+          if (xmlProofreadMode && xmlProofreadMeta) {
+            return (
+              <div className="space-y-4">
+                {/* Header: Xem trước + Dịch Mới */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Hiệu Đính Kết Quả</h2>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                      {xmlProofreadFlatRows.length} dòng
+                      {(() => {
+                        const scores = Object.values(xmlQualityScores);
+                        const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b.score, 0) / scores.length) : null;
+                        return avg !== null ? (
+                          <span className={`ml-2 font-medium ${avg >= 85 ? 'text-green-600 dark:text-green-400' : avg >= 70 ? 'text-yellow-600 dark:text-yellow-400' : avg >= 60 ? 'text-orange-600 dark:text-orange-400' : 'text-red-600 dark:text-red-400'}`}>
+                            &bull; Chất lượng TB: {avg}/100
+                          </span>
+                        ) : null;
+                      })()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <button type="button" onClick={() => setXmlProofreadMode(false)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+                      Xem trước
+                    </button>
+                    <Button variant="secondary" onClick={resetAll}>Dịch Mới</Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Ngôn Ngữ Nguồn (AI hiệu đính)</label>
+                    <select value={sourceLang} onChange={(e) => setSourceLang(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                      <option value="">Chọn ngôn ngữ…</option>
+                      {sourceLanguageOptions.map((l) => <option key={l.id} value={l.code}>{getLanguageNameVi(l.code, l.name)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Ngôn Ngữ Đích (AI hiệu đính)</label>
+                    <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} disabled={!sourceLang} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-60">
+                      <option value="">Chọn ngôn ngữ…</option>
+                      {(targetOptionsBySource[sourceLang] ?? sourceLanguageOptions).map((l) => <option key={l.id} value={l.code}>{getLanguageNameVi(l.code, l.name)}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Toolbar tìm kiếm — 100% giống Excel */}
+                <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                  <div className="relative">
+                    <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z" />
+                    </svg>
+                    <input type="text" placeholder="Tìm kiếm…" value={xmlProofreadSearch} onChange={(e) => setXmlProofreadSearch(e.target.value)} className="pl-8 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-64" />
+                  </div>
+                </div>
+
+                {/* Find & Replace — 100% giống Excel */}
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input type="text" placeholder="Nội dung cần thay thế…" value={xmlProofreadFind} onChange={(e) => setXmlProofreadFind(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && xmlProofreadReplaceAll()} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[140px] max-w-xs" />
+                    <input type="text" placeholder="Nội dung thay thế…" value={xmlProofreadReplace} onChange={(e) => setXmlProofreadReplace(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && xmlProofreadReplaceAll()} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[140px] max-w-xs" />
+                    <Button size="sm" variant="secondary" onClick={xmlProofreadReplaceAll}>
+                      {xmlProofreadSelected.size > 0 ? `Replace (${xmlProofreadSelected.size} dòng đã chọn)` : 'Replace tất cả'}
+                    </Button>
+                    {(xmlProofreadFind || xmlProofreadReplace) && <button type="button" onClick={() => { setXmlProofreadFind(''); setXmlProofreadReplace(''); }} className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">Xóa</button>}
+                  </div>
+                  {xmlProofreadSelected.size > 0 && (
+                    <Button size="sm" isLoading={xmlProofreadBatchLoading} disabled={xmlProofreadBatchLoading || !sourceLang || !targetLang} onClick={xmlProofreadBatchAi}>
+                      AI Hiệu Đính {xmlProofreadSelected.size} dòng đã chọn
+                    </Button>
+                  )}
+                </div>
+
+                {/* Bảng 100% giống Excel: wrapper overflow-hidden + overflow-x-auto */}
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700">
+                          <th className="px-4 py-3 w-10">
+                            <input type="checkbox" checked={xmlProofreadFlatFiltered.length > 0 && xmlProofreadFlatFiltered.every((r) => xmlProofreadSelected.has(r.flatIndex))} onChange={(e) => xmlProofreadFlatSelectAllFn(e.target.checked)} className="rounded border-gray-300 text-brand-600" />
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-10">#</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">GỐC</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">ĐÃ DỊCH</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-28">TRẠNG THÁI</th>
+                          {Object.keys(xmlQualityScores).length > 0 && (
+                            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-20">ĐIỂM</th>
+                          )}
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">THAO TÁC</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
+                        {xmlProofreadFlatFiltered.length === 0 ? (
+                          <tr><td colSpan={Object.keys(xmlQualityScores).length > 0 ? 7 : 6} className="px-4 py-8 text-center text-gray-400 text-sm">{xmlProofreadSearch ? 'Không tìm thấy kết quả.' : 'Chưa có dữ liệu.'}</td></tr>
+                        ) : (
+                          xmlProofreadFlatFiltered.map((item, flatIdx) => {
+                            const isSelected = xmlProofreadSelected.has(item.flatIndex);
+                            const statusKey = `${item.rowIndex}-${item.col}`;
+                            const status: S5Status = xmlProofreadAiLoadingFlatIndex === item.flatIndex ? 'loading' : (xmlProofreadStatus[statusKey] ?? 'original');
+                            const badge = S5_BADGE[status];
+                            const isLoading = status === 'loading';
+                            const currentTranslated = xmlProofreadRows[item.rowIndex]?.[item.col] ?? item.translated;
+                            const rowId = item.rowIndex + 1;
+                            const xmlQr = xmlQualityScores[rowId];
+                            const xmlColSpan = 6 + (Object.keys(xmlQualityScores).length > 0 ? 1 : 0);
+                            const isXmlExpanded = xmlQualityExpandedRowId === rowId;
+                            const isFirstFlatRowForDataRow = xmlProofreadFlatFiltered.findIndex((r) => r.rowIndex === item.rowIndex) === flatIdx;
+                            return (
+                              <React.Fragment key={item.flatIndex}>
+                                <tr className={`transition-colors ${isSelected ? 'bg-brand-50/40 dark:bg-brand-900/10' : 'bg-white dark:bg-gray-800 hover:bg-gray-50/80 dark:hover:bg-gray-700/20'}`}>
+                                  <td className="px-4 py-3">
+                                    <input type="checkbox" checked={isSelected} onChange={(e) => xmlProofreadFlatSelect(item.flatIndex, e.target.checked)} className="rounded border-gray-300 text-brand-600" />
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-400 font-mono text-xs align-top pt-4">{item.flatIndex + 1}</td>
+                                  <td className="px-4 py-3 text-gray-700 dark:text-gray-300 align-top max-w-[220px]">
+                                    <div className="break-words leading-relaxed text-xs">{item.original}</div>
+                                  </td>
+                                  <td className="px-4 py-3 align-top max-w-[280px]">
+                                    {isLoading ? (
+                                      <div className="flex items-center gap-2 text-gray-400 py-1 text-xs">
+                                        <svg className="animate-spin w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                                        Đang hiệu đính…
+                                      </div>
+                                    ) : (
+                                      <textarea
+                                        value={currentTranslated}
+                                        onChange={(e) => updateXmlProofreadCell(item.rowIndex, item.col, e.target.value)}
+                                        rows={Math.max(2, Math.ceil(currentTranslated.length / 48))}
+                                        className={`w-full px-2 py-1.5 text-sm border rounded-lg resize-none transition-colors bg-transparent focus:outline-none text-gray-900 dark:text-gray-100 ${
+                                          status === 'ai-proofread' ? 'border-green-300 dark:border-green-700 bg-green-50/50 dark:bg-green-900/10'
+                                          : status === 'edited' ? 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10'
+                                          : 'border-transparent hover:border-gray-300 dark:hover:border-gray-600 focus:border-brand-400 focus:bg-white dark:focus:bg-gray-900'
+                                        }`}
+                                      />
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 align-top pt-4">
+                                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${badge.cls}`}>{badge.label}</span>
+                                  </td>
+                                  {Object.keys(xmlQualityScores).length > 0 && (
+                                    <td className="px-4 py-3 align-top pt-3">
+                                      {xmlQr ? (
+                                        <button
+                                          type="button"
+                                          title={`${xmlQr.verdict} · Click để xem chi tiết`}
+                                          onClick={() => setXmlQualityExpandedRowId(isXmlExpanded ? null : rowId)}
+                                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold cursor-pointer transition-opacity hover:opacity-80 ${getScoreBadgeCls(xmlQr.score)}`}
+                                        >
+                                          {xmlQr.score}
+                                          <svg className={`w-3 h-3 transition-transform ${isXmlExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                          </svg>
+                                        </button>
+                                      ) : (
+                                        <span className="text-xs text-gray-300 dark:text-gray-600">—</span>
+                                      )}
+                                    </td>
+                                  )}
+                                  <td className="px-4 py-3 align-top pt-3.5">
+                                    <button type="button" disabled={isLoading || xmlProofreadBatchLoading} onClick={() => xmlProofreadRowAi(item.flatIndex)} className="text-xs text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+                                      AI Hiệu Đính
+                                    </button>
+                                  </td>
+                                </tr>
+                                {isXmlExpanded && xmlQr && isFirstFlatRowForDataRow && (
+                                  <tr className="bg-gray-50 dark:bg-gray-900/40">
+                                    <td colSpan={xmlColSpan} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700/50">
+                                      <div className="space-y-2">
+                                        <div className="flex items-center gap-3">
+                                          <span className={`text-sm font-semibold ${getScoreBadgeCls(xmlQr.score)} px-2.5 py-0.5 rounded-full`}>
+                                            {xmlQr.score}/100 — {xmlQr.verdict}
+                                          </span>
+                                          {xmlQr.issues.length === 0 && (
+                                            <span className="text-xs text-green-600 dark:text-green-400">Không phát hiện vấn đề nào.</span>
+                                          )}
+                                        </div>
+                                        {xmlQr.issues.length > 0 && (
+                                          <ul className="space-y-1">
+                                            {xmlQr.issues.map((issue, i) => (
+                                              <li key={i} className="flex items-start gap-2 text-xs">
+                                                <span className={`shrink-0 font-semibold uppercase ${getSeverityCls(issue.severity)}`}>
+                                                  [{issue.severity === 'critical' ? 'Nghiêm trọng' : issue.severity === 'major' ? 'Quan trọng' : 'Nhỏ'}]
+                                                </span>
+                                                <span className="text-gray-700 dark:text-gray-300">{issue.message}</span>
+                                                {issue.suggestion && (
+                                                  <span className="text-gray-400 dark:text-gray-500 italic">→ {issue.suggestion}</span>
+                                                )}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        )}
+                                        {xmlQr.suggestions.length > 0 && (
+                                          <div className="text-xs text-blue-600 dark:text-blue-400 pt-1">
+                                            <span className="font-medium">Gợi ý: </span>
+                                            {xmlQr.suggestions[0]}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Footer 100% giống Excel: text + hai nút Tải File (.xml / .csv) */}
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Tải xuống hoặc chỉnh sửa trước khi tải.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button onClick={downloadXmlProofreadXml}>
+                      <svg className="w-4 h-4 mr-1.5 -ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                      Tải File .xml
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          const xmlDisplayColumns = xmlOriginalRows.length > 0
+            ? xmlColsToShow.flatMap((k) => [`${k} (gốc)`, `${k} (đã dịch)`])
+            : xmlColsToShow;
+          const xmlMergedRows = xmlOriginalRows.length > 0
+            ? xmlPreviewRows.map((transRow, i) => {
+                const origRow = xmlOriginalRows[i] ?? {};
+                const merged: Record<string, string> = {};
+                xmlColsToShow.forEach((k) => {
+                  merged[`${k} (gốc)`] = origRow[k] ?? '';
+                  merged[`${k} (đã dịch)`] = transRow[k] ?? '';
+                });
+                return merged;
+              })
+            : xmlPreviewRows.map((row) => Object.fromEntries(xmlColsToShow.map((k) => [k, row[k] ?? ''])));
+
+          /* Bước 5 xem trước XML — cấu trúc giống Excel (header + bảng chất lượng + nút) */
+          const xmlQScores = Object.values(xmlQualityScores);
+          const xmlQGood = xmlQScores.filter((q) => q.score >= 85).length;
+          const xmlQOk = xmlQScores.filter((q) => q.score >= 70 && q.score < 85).length;
+          const xmlQWarn = xmlQScores.filter((q) => q.score >= 60 && q.score < 70).length;
+          const xmlQBad = xmlQScores.filter((q) => q.score < 60).length;
+          const xmlQTotal = xmlQScores.length;
+          const xmlQualityAvg = xmlQTotal > 0 ? Math.round(xmlQScores.reduce((a, b) => a + b.score, 0) / xmlQTotal) : null;
+
           return (
             <div className="space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Xem trước Dịch thuật (XML)</h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Đã dịch file XML giữ cấu trúc (chỉ text trong thẻ, giữ placeholder). Xem nội dung bên dưới và tải file nếu cần.
-              </p>
-              {translatedXmlContent && (
-                <div className="overflow-auto max-h-[400px] rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3">
-                  <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all font-mono">
-                    {translatedXmlContent}
-                  </pre>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Kết quả Dịch thuật</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  Đã dịch {xmlMergedRows.length} dòng
+                  {xmlQTotal > 0 && <> · {xmlQTotal} dòng đã kiểm tra chất lượng</>}
+                  {' · '}{sourceLang} → {targetLang}
+                </p>
+              </div>
+
+              {/* Quality summary panel (giống Excel) */}
+              {xmlQualityLoading && xmlQTotal === 0 && (
+                <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-4 py-3 flex items-center gap-3">
+                  <svg className="animate-spin w-5 h-5 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                  </svg>
+                  <p className="text-sm text-blue-700 dark:text-blue-300">Đang kiểm tra chất lượng…</p>
                 </div>
               )}
+              {xmlQTotal > 0 && (
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-4">
+                  <div className="flex items-center gap-6 flex-wrap">
+                    <div className="text-center min-w-[72px]">
+                      <div className={`text-4xl font-bold tabular-nums ${xmlQualityAvg !== null && xmlQualityAvg >= 85 ? 'text-green-600 dark:text-green-400' : xmlQualityAvg !== null && xmlQualityAvg >= 70 ? 'text-yellow-600 dark:text-yellow-400' : xmlQualityAvg !== null && xmlQualityAvg >= 60 ? 'text-orange-500 dark:text-orange-400' : 'text-red-600 dark:text-red-400'}`}>
+                        {xmlQualityAvg}
+                      </div>
+                      <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Điểm TB / 100</div>
+                    </div>
+                    <div className="flex-1 min-w-[200px] space-y-1.5">
+                      {[
+                        { label: 'Tốt (≥85)', count: xmlQGood, color: 'bg-green-500', textCls: 'text-green-600 dark:text-green-400' },
+                        { label: 'Chấp nhận (70–84)', count: xmlQOk, color: 'bg-yellow-400', textCls: 'text-yellow-600 dark:text-yellow-400' },
+                        { label: 'Cần cải thiện (60–69)', count: xmlQWarn, color: 'bg-orange-400', textCls: 'text-orange-500 dark:text-orange-400' },
+                        { label: 'Cần dịch lại (<60)', count: xmlQBad, color: 'bg-red-500', textCls: 'text-red-600 dark:text-red-400' },
+                      ].map(({ label, count, color, textCls }) => (
+                        <div key={label} className="flex items-center gap-2 text-xs">
+                          <span className="w-36 text-gray-500 dark:text-gray-400 shrink-0">{label}</span>
+                          <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                            <div className={`h-2 rounded-full transition-all duration-500 ${color}`} style={{ width: xmlQTotal > 0 ? `${(count / xmlQTotal) * 100}%` : '0%' }} />
+                          </div>
+                          <span className={`w-8 text-right font-medium tabular-nums ${textCls}`}>{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(xmlPreviewLoading || (xmlOriginalRows.length > 0 && xmlOriginalLoading)) ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-gray-500 dark:text-gray-400 text-sm">
+                  <svg className="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                  Đang tải xem trước…
+                </div>
+              ) : (
+                <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-100 dark:bg-gray-800">
+                        {xmlDisplayColumns.map((k) => (
+                          <th key={k} className="px-4 py-2 text-left font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">{k}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {xmlDisplayColumns.length > 0 && xmlMergedRows.length > 0 ? (
+                        xmlMergedRows.map((row, i) => (
+                          <tr key={i} className="border-t border-gray-200 dark:border-gray-700">
+                            {xmlDisplayColumns.map((k) => (
+                              <td key={k} className="px-4 py-2 text-gray-900 dark:text-gray-100 max-w-[200px] truncate align-top" title={String(row[k] ?? '')}>{row[k] ?? ''}</td>
+                            ))}
+                          </tr>
+                        ))
+                      ) : translatedXmlContent ? (
+                        <tr><td colSpan={xmlDisplayColumns.length || 1} className="px-4 py-8 text-center text-gray-400 text-sm italic">Không thể hiển thị dạng bảng. Bạn có thể tải file hoặc dùng Hiệu đính.</td></tr>
+                      ) : (
+                        <tr><td colSpan={xmlDisplayColumns.length || 1} className="px-4 py-8 text-center text-gray-400 text-sm italic">Nội dung trống hoặc đang tải…</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
               <div className="flex gap-2 flex-wrap">
-                <Button
-                  variant="secondary"
-                  onClick={downloadXmlFile}
-                  disabled={!translatedXmlContent}
-                >
+                <Button onClick={enterXmlProofread} disabled={!translatedXmlContent || xmlProofreadLoading}>Hiệu Đính</Button>
+                <Button variant="secondary" onClick={downloadXmlFile} disabled={!translatedXmlContent}>
                   Tải File
                 </Button>
-                <Button variant="secondary" onClick={() => setStep(3)}>Dịch Lại</Button>
                 <Button variant="secondary" onClick={resetAll}>
                   Dịch thuật Mới
                 </Button>
@@ -1493,7 +2783,7 @@ export default function TranslationFilePage() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Ngôn Ngữ Đích (AI hiệu đính)</label>
-              <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+              <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} disabled={!sourceLang} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-60">
                 <option value="">Chọn ngôn ngữ…</option>
                 {(targetOptionsBySource[sourceLang] ?? sourceLanguageOptions).map((l) => <option key={l.id} value={l.code}>{getLanguageNameVi(l.code, l.name)}</option>)}
               </select>
@@ -1555,7 +2845,6 @@ export default function TranslationFilePage() {
                     const isLoading = row.status === 'loading';
                     const qr = s5QualityScores[row.id];
                     const isExpanded = s5QualityExpanded === row.id;
-                    const isRetranslating = s5RetranslateLoadingIds.has(row.id);
                     const colSpan = s5QualityCheckedCount > 0 ? 7 : 6;
                     return (
                       <React.Fragment key={row.id}>
@@ -1611,19 +2900,9 @@ export default function TranslationFilePage() {
                           )}
                           <td className="px-4 py-3 align-top pt-3.5">
                             <div className="flex flex-col gap-1">
-                              <button type="button" disabled={isLoading || s5BatchLoading} onClick={() => s5ProofreadRow(row.id)} className="text-xs text-brand-600 dark:text-brand-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+                              <button type="button" disabled={isLoading || s5BatchLoading} onClick={() => s5ProofreadRow(row.id)} className="text-xs text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
                                 AI Hiệu Đính
                               </button>
-                              {qr?.should_retranslate && (
-                                <button
-                                  type="button"
-                                  disabled={isRetranslating || isLoading}
-                                  onClick={() => s5RetranslateRow(row.id)}
-                                  className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
-                                >
-                                  {isRetranslating ? 'Đang dịch…' : 'Dịch lại'}
-                                </button>
-                              )}
                             </div>
                           </td>
                         </tr>

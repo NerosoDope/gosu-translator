@@ -493,6 +493,8 @@ export const translateAPI = {
     prompt_id?: number | null;
     context?: string | null;
     style?: string | null;
+    game_id?: number | null;
+    game_category_id?: number | null;
   }) => apiClient.post<{ translated_text: string }>('/translate', data),
   /** Kiểm tra Gemini API key có hoạt động hay không (đọc từ Cài đặt) */
   verifyApiKey: () => apiClient.get<{ ok: boolean; message: string }>('/translate/verify'),
@@ -600,10 +602,22 @@ export const translateAPI = {
     if (params.game_id != null) formData.append('game_id', String(params.game_id));
     if (params.game_category_id != null) formData.append('game_category_id', String(params.game_category_id));
     return apiClient.post('/translate/translate-xml-file', formData, {
-      responseType: 'blob',
+      responseType: 'arraybuffer',
       timeout: 300000,
     });
   },
+  /** Parse nội dung XML (chuỗi) thành columns + rows để hiệu đính. */
+  parseXmlContent: (content: string) =>
+    apiClient.post<{ columns: string[]; rows: Record<string, string>[]; root_tag: string; row_tag: string; root_attribs: Record<string, string>; declaration: string }>(
+      '/translate/parse-xml-content',
+      { content }
+    ),
+  /** Parse nội dung JSON (chuỗi) thành columns + rows để xem trước / hiệu đính. */
+  parseJsonContent: (content: string) =>
+    apiClient.post<{ columns: string[]; rows: Record<string, string>[] }>('/translate/parse-json-content', { content }),
+  /** Dựng lại chuỗi XML từ rows sau hiệu đính. */
+  rebuildXmlFromRows: (params: { root_tag: string; row_tag: string; root_attribs: Record<string, string>; columns: string[]; rows: Record<string, string>[]; declaration?: string }) =>
+    apiClient.post<{ content: string }>('/translate/rebuild-xml-from-rows', params),
   /**
    * Dịch file với SSE streaming để hiển thị tiến trình real-time.
    * Dùng native fetch thay vì axios (EventSource chỉ hỗ trợ GET).

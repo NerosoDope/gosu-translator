@@ -4,6 +4,7 @@ import React, { useState, useRef } from 'react';
 import { useToastContext } from '@/context/ToastContext';
 import { filesAPI, importBatchesAPI, jobAPI } from '@/lib/api';
 import { authStore } from '@/lib/auth';
+import { generateJobCode, JOB_CODE_PREFIX } from '@/lib/jobCode';
 
 interface ExcelUploadModalProps {
   isOpen: boolean;
@@ -81,7 +82,7 @@ export default function ExcelUploadModal({
           try {
             const user = await authStore.getCurrentUser();
             if (user?.id) {
-              const jobCode = `GLOSSARY-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+              const jobCode = generateJobCode(JOB_CODE_PREFIX.GLOSSARY);
               await jobAPI.create({
                 job_code: jobCode,
                 job_type: 'glossary_update',

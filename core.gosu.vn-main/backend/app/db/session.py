@@ -39,7 +39,7 @@ from app.core.config import settings
 # max_overflow: Số lượng connections tối đa có thể vượt quá pool_size
 engine = create_async_engine(
     settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://").replace("postgresql+psycopg://", "postgresql+asyncpg://"),
-    echo=settings.DEBUG,  # Log SQL queries khi DEBUG=True
+    echo=False,  # Tắt log SQL (tránh in query trong jobs/worker)
     future=True,
     pool_pre_ping=True,  # Tự động kiểm tra và reconnect nếu connection bị mất
     pool_size=10,  # Số lượng connections trong pool

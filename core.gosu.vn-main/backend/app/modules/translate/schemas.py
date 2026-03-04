@@ -33,6 +33,8 @@ class TranslateRequest(BaseModel):
     prompt_id: Optional[int] = None
     context: Optional[str] = None
     style: Optional[str] = None
+    game_id: Optional[int] = None  # không bắt buộc; khi chọn game thì áp dụng cache > game glossary > global glossary > AI
+    game_category_id: Optional[int] = None  # tùy chọn, lọc từ điển chung theo thể loại game
 
     @field_validator("text", "source_lang", "target_lang", mode="before")
     @classmethod
@@ -41,9 +43,9 @@ class TranslateRequest(BaseModel):
             return ""
         return str(v).strip() if isinstance(v, str) else str(v)
 
-    @field_validator("prompt_id", mode="before")
+    @field_validator("prompt_id", "game_id", "game_category_id", mode="before")
     @classmethod
-    def coerce_prompt_id(cls, v: Any) -> Optional[int]:
+    def coerce_optional_int(cls, v: Any) -> Optional[int]:
         if v is None or v == "":
             return None
         if isinstance(v, int):
@@ -107,3 +109,44 @@ class ProofreadBatchResultItem(BaseModel):
 class ProofreadBatchResponse(BaseModel):
     """Response hiệu đính batch."""
     results: List[ProofreadBatchResultItem]
+
+
+class ParseXmlContentRequest(BaseModel):
+    """Request parse nội dung XML (chuỗi) để hiệu đính."""
+    content: str = ""
+
+
+class ParseXmlContentResponse(BaseModel):
+    """Response parse XML: columns, rows và metadata để rebuild."""
+    columns: List[str]
+    rows: List[Dict[str, str]]
+    root_tag: str
+    row_tag: str
+    root_attribs: Dict[str, str]
+    declaration: str = ""
+
+
+class RebuildXmlRequest(BaseModel):
+    """Request dựng lại XML từ rows sau hiệu đính."""
+    root_tag: str
+    row_tag: str
+    root_attribs: Dict[str, str] = {}
+    columns: List[str]
+    rows: List[Dict[str, str]]
+    declaration: str = ""
+
+
+class RebuildXmlResponse(BaseModel):
+    """Response nội dung XML đã rebuild."""
+    content: str
+
+
+class ParseJsonContentRequest(BaseModel):
+    """Request parse nội dung JSON (chuỗi) để xem trước / hiệu đính."""
+    content: str = ""
+
+
+class ParseJsonContentResponse(BaseModel):
+    """Response parse JSON: columns và rows (toàn bộ, không giới hạn preview)."""
+    columns: List[str]
+    rows: List[Dict[str, str]]

@@ -20,6 +20,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
+import { useRouter } from 'next/navigation';
 
 // Components
 import DataTable, { Column } from '@/components/data/DataTable';
@@ -89,11 +90,48 @@ function canDo(action: string, status: string, isDeleted: boolean): boolean {
   return (allowed[status] ?? []).includes(action);
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  pending: 'Chờ xử lý',
+  in_progress: 'Đang xử lý',
+  completed: 'Hoàn thành',
+  failed: 'Thất bại',
+  cancelled: 'Đã hủy',
+};
+
+/** Job có phải dịch file không (để hiện nút Hiệu đính / Tải xuống). */
+function isFileTranslationJob(job: Job): boolean {
+  return job.payload?.source_type === 'file' || job.payload?.filename != null;
+}
+
+/** Job hoàn thành có dữ liệu file để tải xuống không. */
+function hasDownloadableResult(job: Job): boolean {
+  if (job.status !== 'completed' || !job.result) return false;
+  const r = job.result as Record<string, unknown>;
+  return !!(r.translated_docx_b64 || r.translated_json || (Array.isArray(r.rows) && r.rows.length > 0));
+}
+
+/** Nguồn tạo job: từ payload.source_type hoặc suy từ job_code/payload (job cũ). */
+function getJobSourceLabel(job: Job): string {
+  const st = job.payload?.source_type;
+  if (st === 'file') return 'Dịch file';
+  if (st === 'direct') return 'Dịch trực tiếp';
+  if (st === 'proofread') return 'Hiệu đính';
+  const code = (job.job_code || '').toUpperCase();
+  if (code.startsWith('DIRECT-')) return 'Dịch trực tiếp';
+  if (code.startsWith('TRANSLATION-FILE-')) return 'Dịch file';
+  if (code.startsWith('PROOFREAD-')) return 'Hiệu đính';
+  if (job.payload?.filename != null) return 'Dịch file';
+  if (job.payload?.text != null) return 'Dịch trực tiếp';
+  return '—';
+}
+
 function JobPageContent() {
   const toast = useToastContext();
-  
+  const router = useRouter();
+
   // State management
   const [editingJob, setEditingJob] = useState<Job | undefined>(undefined);
+  const [downloadingJobId, setDownloadingJobId] = useState<number | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
 
   // Confirmation modal state
@@ -294,6 +332,73 @@ function JobPageContent() {
     }
   };
 
+  const handleProofread = (job: Job) => {
+    router.push('/translation/proofread');
+  };
+
+  const handleDownload = async (job: Job) => {
+    setDownloadingJobId(job.id);
+    try {
+      const res = await jobAPI.get(job.id);
+      const data = res.data;
+      const result = (data?.result || {}) as Record<string, unknown>;
+      const filename = (data?.payload?.filename as string) || job.job_code || 'translated';
+      const baseName = filename.replace(/\.[^.]+$/, '') || 'translated';
+
+      if (result.translated_docx_b64 && typeof result.translated_docx_b64 === 'string') {
+        const bin = atob(result.translated_docx_b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        const blob = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_translated.docx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Đã tải file DOCX.');
+        return;
+      }
+      if (result.translated_json != null) {
+        const blob = new Blob([JSON.stringify(result.translated_json, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_translated.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Đã tải file JSON.');
+        return;
+      }
+      if (Array.isArray(result.rows) && result.rows.length > 0) {
+        const columns = (result.output_columns as string[]) || Object.keys((result.rows[0] as Record<string, unknown>) || {});
+        const header = columns.join(',');
+        const csvRows = (result.rows as Record<string, unknown>[]).map((row) =>
+          columns.map((c) => {
+            const v = row[c];
+            const s = v == null ? '' : String(v);
+            return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+          }).join(',')
+        );
+        const csv = [header, ...csvRows].join('\n');
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${baseName}_translated.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success('Đã tải file CSV.');
+        return;
+      }
+      toast.warning('Job này chưa lưu file đã dịch. Các job dịch file mới sẽ hỗ trợ tải xuống.');
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? 'Không thể tải file.');
+    } finally {
+      setDownloadingJobId(null);
+    }
+  };
+
   const [hardDeleteTarget, setHardDeleteTarget] = useState<Job | null>(null);
   const handleHardDelete = (job: Job) => setHardDeleteTarget(job);
   const handleConfirmHardDelete = async () => {
@@ -386,7 +491,7 @@ function JobPageContent() {
         return (
             <div className="flex flex-col gap-1 w-fit">
             <span className={`inline-flex items-center px-2 py-1 text-xs rounded-full ${statusColors[job.status] || statusColors.pending}`}>
-              {job.status}
+              {STATUS_LABELS[job.status] ?? job.status}
             </span>
             {job.is_deleted && (
               <span className="inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
@@ -450,6 +555,31 @@ function JobPageContent() {
             <button onClick={() => setViewingJob(job)} className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100" title="Xem chi tiết">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
             </button>
+
+            {/* Hiệu đính — icon giống AppSidebar mục Quản Lý Prompts (tờ giấy có 2 dòng) */}
+            {!del && isFileTranslationJob(job) && job.status === 'completed' && (
+              <button
+                onClick={() => handleProofread(job)}
+                className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
+                title="Hiệu đính"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </button>
+            )}
+
+            {/* Tải xuống — job dịch file đã lưu kết quả: tải lại file đã dịch */}
+            {!del && isFileTranslationJob(job) && (hasDownloadableResult(job) || job.status === 'completed') && (
+              <button
+                onClick={() => handleDownload(job)}
+                disabled={downloadingJobId === job.id}
+                className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={downloadingJobId === job.id ? 'Đang tải...' : 'Tải xuống file đã dịch'}
+              >
+                <svg className={`w-5 h-5 ${downloadingJobId === job.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              </button>
+            )}
 
             {/* Chỉnh sửa */}
             {canDo('edit', s, del) && (
@@ -547,11 +677,11 @@ function JobPageContent() {
               className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               <option value="">Tất cả trạng thái</option>
-              <option value="pending">Pending</option>
-              <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-              <option value="cancelled">Cancelled</option>
+              <option value="pending">Chờ xử lý</option>
+              <option value="in_progress">Đang xử lý</option>
+              <option value="completed">Hoàn thành</option>
+              <option value="failed">Thất bại</option>
+              <option value="cancelled">Đã hủy</option>
             </select>
 
             <select
@@ -768,7 +898,7 @@ function JobPageContent() {
                     };
                     return (
                       <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${statusColors[viewingJob.status] || statusColors.pending}`}>
-                        {viewingJob.status}
+                        {STATUS_LABELS[viewingJob.status] ?? viewingJob.status}
                       </span>
                     );
                   })()}
@@ -812,6 +942,7 @@ function JobPageContent() {
                 <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Thông tin cơ bản</h4>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Loại job</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.job_type}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Nguồn</span><span className="font-medium text-gray-900 dark:text-gray-100">{getJobSourceLabel(viewingJob)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Thử lại</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.retry_count ?? 0} / {viewingJob.max_retry ?? 3}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Người tạo</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.creator_name ?? '-'}</span></div>
                   {viewingJob.game_id && <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Game ID</span><span className="font-medium text-gray-900 dark:text-gray-100">{viewingJob.game_id}</span></div>}
@@ -866,6 +997,31 @@ function JobPageContent() {
                 <div>
                   <h4 className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Dữ liệu đầu vào (Payload)</h4>
                   <pre className="p-3 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs overflow-x-auto text-gray-800 dark:text-gray-200">{JSON.stringify(viewingJob.payload, null, 2)}</pre>
+                </div>
+              )}
+
+              {/* Nút Hiệu đính & Tải xuống cho job dịch file */}
+              {isFileTranslationJob(viewingJob) && viewingJob.status === 'completed' && (
+                <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <button
+                    type="button"
+                    onClick={() => { handleProofread(viewingJob); setViewingJob(null); }}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Hiệu đính
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(viewingJob)}
+                    disabled={downloadingJobId === viewingJob.id}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <svg className={`w-4 h-4 ${downloadingJobId === viewingJob.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    Tải xuống file đã dịch
+                  </button>
                 </div>
               )}
             </div>
