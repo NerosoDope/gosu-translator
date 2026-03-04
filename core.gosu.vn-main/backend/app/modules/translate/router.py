@@ -95,6 +95,34 @@ def _build_token_batches(
     return batches
 
 
+# Pending file có placeholder: (row_idx, col, orig_text, text_for_ai, placeholders)
+_FilePendingWithPh = Tuple[int, str, str, str, List[str]]
+
+
+def _build_token_batches_file(
+    pending: "List[_FilePendingWithPh]",
+    max_tokens: int = TRANSLATE_BATCH_MAX_INPUT_TOKENS,
+    max_items: int = TRANSLATE_BATCH_SIZE,
+) -> "List[List[_FilePendingWithPh]]":
+    """Gom pending file (đã bóc placeholder) thành batch theo token của text_for_ai."""
+    batches: List[List[_FilePendingWithPh]] = []
+    current: List[_FilePendingWithPh] = []
+    current_tokens = 0
+    for item in pending:
+        text_for_ai = item[3]
+        tok = _estimate_tokens(text_for_ai) + 6
+        if current and (current_tokens + tok > max_tokens or len(current) >= max_items):
+            batches.append(current)
+            current = [item]
+            current_tokens = tok
+        else:
+            current.append(item)
+            current_tokens += tok
+    if current:
+        batches.append(current)
+    return batches
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Smart Filter — phân loại 5 nhóm:
 #   🟢 Natural language   → dịch
@@ -128,7 +156,7 @@ _RE_HAS_LETTER  = re.compile(r"[a-zA-ZÀ-ỹ\u00C0-\u024F\u1E00-\u1EFF]")
 _RE_NATURAL_START = re.compile(r"^[A-ZÀ-Ỵ\u00C0-\u024F\u1E00-\u1EFF][a-zà-ỹ\u00C0-\u024F\u1E00-\u1EFF]")
 _RE_PUNCTUATION = re.compile(r"[.,!?;:]")
 
-# Nhóm 🔵 Placeholder — tất cả dạng biến: {x}, {{x}}, %s, %d, %1$s, ${x}, <x>, @x@
+# Nhóm 🔵 Placeholder — tất cả dạng biến: {x}, {{x}}, %s, %d, %1$s, ${x}, <x>, @x@, thẻ HTML <br>, <br/>
 _RE_PLACEHOLDER = re.compile(
     r"("
     r"\{\{[^}]+\}\}"           # {{count}}
@@ -137,7 +165,7 @@ _RE_PLACEHOLDER = re.compile(
     r"|%\d*\$?[sdifcq%]"       # %s %d %1$s %02d
     r"|%[sdicfqoxXeEgGp%]"     # C-style printf
     r"|@[A-Za-z_][A-Za-z0-9_]*@"  # @name@
-    r"|<[A-Za-z_][A-Za-z0-9_]*>"  # <var>
+    r"|<[A-Za-z_][A-Za-z0-9_]*\s*/?>"   # <var>, <br>, <br/>, <br />
     r")"
 )
 
@@ -674,19 +702,20 @@ async def translate_file(
             except Exception:
                 pass
             seen_texts[text] = None
-    pending: List[Tuple[int, str, str]] = []
+    pending: List[_FilePendingWithPh] = []
     for row_idx, col, text in cell_tasks:
         hit = seen_texts.get(text)
         if hit is not None:
             rows[row_idx][col + "_translated"] = hit
         else:
             rows[row_idx][col + "_translated"] = None
-            pending.append((row_idx, col, text))
+            text_for_ai, phs = _extract_placeholders(text)
+            pending.append((row_idx, col, text, text_for_ai, phs))
 
-    # ── Pass 2: gom batch theo token → gọi AI 1 lần / batch → lưu cache ──
-    token_batches = _build_token_batches(pending)
+    # ── Pass 2: gom batch theo token → gọi AI (gửi text đã thay placeholder) → khôi phục thẻ ──
+    token_batches = _build_token_batches_file(pending)
     for batch in token_batches:
-        texts_to_translate = [t for _, _, t in batch]
+        texts_to_translate = [item[3] for item in batch]
         try:
             results = await translate_with_ai_batch(
                 db,
@@ -701,14 +730,16 @@ async def translate_file(
             )
         except Exception as e:
             logger.warning("translate_with_ai_batch: %s", e)
-            results = [t for _, _, t in batch]
+            results = [item[3] for item in batch]
         saved_count = 0
-        for (row_idx, col, orig_text), translated in zip(batch, results):
-            rows[row_idx][col + "_translated"] = translated or orig_text
-            if translated and translated != orig_text:
-                await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang, origin="file")
+        for item, translated in zip(batch, results):
+            row_idx, col, orig_text, _text_for_ai, phs = item
+            restored = _restore_placeholders(translated or "", phs)
+            rows[row_idx][col + "_translated"] = restored.strip() or orig_text
+            if restored.strip() and restored.strip() != orig_text:
+                await save_translation_to_cache(db, orig_text, restored.strip(), source_lang, target_lang, origin="file")
                 saved_count += 1
-            logger.info("translate_file batch: %d results, %d cached", len(batch), saved_count)
+        logger.info("translate_file batch: %d results, %d cached", len(batch), saved_count)
 
     output_columns = columns + [c + "_translated" for c in to_translate]
     translated_json = None
@@ -844,18 +875,19 @@ async def translate_file_stream(
                 except Exception:
                     pass
                 seen_texts[text] = None
-        pending: List[Tuple[int, str, str]] = []
+        pending: List[_FilePendingWithPh] = []
         for row_idx, col, text in cell_tasks:
             hit = seen_texts.get(text)
             if hit is not None:
                 rows[row_idx][col + "_translated"] = hit
             else:
                 rows[row_idx][col + "_translated"] = None
-                pending.append((row_idx, col, text))
+                text_for_ai, phs = _extract_placeholders(text)
+                pending.append((row_idx, col, text, text_for_ai, phs))
         logger.info("SSE Pass 1: %d unique texts, %d cache/glossary hits, %d pending", len(unique_texts), len(cell_tasks) - len(pending), len(pending))
 
         total_cells = len(pending)
-        token_batches = _build_token_batches(pending)
+        token_batches = _build_token_batches_file(pending)
         batch_total = len(token_batches)
 
         yield _sse({"type": "start", "total": total_cells, "batch_total": batch_total})
@@ -863,7 +895,7 @@ async def translate_file_stream(
         logger.info("SSE file translate: %d pending cells, %d batches", total_cells, batch_total)
         cells_done = 0
         for batch_idx, batch in enumerate(token_batches):
-            texts_to_translate = [t for _, _, t in batch]
+            texts_to_translate = [item[3] for item in batch]
             logger.info("SSE batch %s input (first 3): %s", batch_idx, texts_to_translate[:3])
             try:
                 results = await translate_with_ai_batch(
@@ -880,13 +912,15 @@ async def translate_file_stream(
                 logger.info("SSE batch %s output (first 3): %s", batch_idx, results[:3])
             except Exception as e:
                 logger.warning("SSE translate batch %s FAILED: %s", batch_idx, e, exc_info=True)
-                results = [t for _, _, t in batch]
+                results = [item[3] for item in batch]
 
             saved_count = 0
-            for (row_idx, col, orig_text), translated in zip(batch, results):
-                rows[row_idx][col + "_translated"] = translated or orig_text
-                if translated and translated != orig_text:
-                    await save_translation_to_cache(db, orig_text, translated, source_lang, target_lang, origin="file")
+            for item, translated in zip(batch, results):
+                row_idx, col, orig_text, _text_for_ai, phs = item
+                restored = _restore_placeholders(translated or "", phs)
+                rows[row_idx][col + "_translated"] = restored.strip() or orig_text
+                if restored.strip() and restored.strip() != orig_text:
+                    await save_translation_to_cache(db, orig_text, restored.strip(), source_lang, target_lang, origin="file")
                     saved_count += 1
             logger.info("SSE batch %s: %d results, %d cached", batch_idx, len(batch), saved_count)
 
@@ -900,7 +934,7 @@ async def translate_file_stream(
                 "batch_total": batch_total,
                 "percent": percent,
                 "batch_size": len(batch),
-                "batch_tokens": sum(_estimate_tokens(t) for _, _, t in batch),
+                "batch_tokens": sum(_estimate_tokens(item[3]) for item in batch),
             })
 
         # Xây dựng kết quả cuối
@@ -1196,16 +1230,31 @@ async def proofread_row_endpoint(
 ):
     """
     Hiệu đính 1 dòng bằng AI: nhận văn bản gốc + bản dịch hiện tại, trả về bản dịch đã cải thiện.
+    Tự động giữ nguyên placeholder/thẻ (ví dụ: <br>, {x}, %s, ...) bằng cách ẩn thành __PH_n__ trước khi gửi AI.
     """
     if not body.original.strip():
         raise HTTPException(status_code=400, detail="Văn bản gốc không được để trống.")
     if not body.source_lang.strip() or not body.target_lang.strip():
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngôn ngữ nguồn và đích.")
+
+    # Bóc placeholder (bao gồm thẻ HTML như <br>, <br/>, {x}, %s, ...) thành __PH_n__ dùng CHUNG
+    # cho cả original và translated để AI không làm mất/thay đổi thẻ.
+    phs: List[str] = []
+
+    def _repl(m: re.Match) -> str:
+        phs.append(m.group(0))
+        return f"__PH_{len(phs) - 1}__"
+
+    original_stripped = body.original.strip()
+    translated_stripped = (body.translated or "").strip()
+    original_for_ai = _RE_PLACEHOLDER.sub(_repl, original_stripped)
+    translated_for_ai = _RE_PLACEHOLDER.sub(_repl, translated_stripped)
+
     try:
         result = await proofread_with_ai(
             db,
-            original=body.original.strip(),
-            translated=(body.translated or "").strip(),
+            original=original_for_ai,
+            translated=translated_for_ai,
             source_lang=body.source_lang.strip(),
             target_lang=body.target_lang.strip(),
             prompt_id=body.prompt_id,
@@ -1216,18 +1265,21 @@ async def proofread_row_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính AI thất bại: {getattr(e, 'message', str(e))}")
+    # Khôi phục placeholder về dạng gốc
+    safe_result = _restore_placeholders(result or "", phs)
+
     # Chỉ ghi cache khi hiệu đính ra nội dung khác với bản cũ; không đổi thì không ghi đè nguồn
-    current_translated = (body.translated or "").strip()
-    if result and (result.strip() != current_translated):
+    current_translated = translated_stripped
+    if safe_result and (safe_result.strip() != current_translated):
         try:
             await save_translation_to_cache(
-                db, body.original.strip(), result,
+                db, original_stripped, safe_result,
                 body.source_lang.strip(), body.target_lang.strip(),
                 origin="proofread",
             )
         except Exception:
             pass
-    return ProofreadRowResponse(proofread=result)
+    return ProofreadRowResponse(proofread=safe_result)
 
 
 @router.post("/proofread-batch", response_model=ProofreadBatchResponse)
@@ -1243,10 +1295,25 @@ async def proofread_batch_endpoint(
         raise HTTPException(status_code=400, detail="Danh sách dòng không được rỗng.")
     if not body.source_lang.strip() or not body.target_lang.strip():
         raise HTTPException(status_code=400, detail="Vui lòng chọn ngôn ngữ nguồn và đích.")
-    items_dicts = [
-        {"index": item.index, "original": item.original, "translated": item.translated}
-        for item in body.items
-    ]
+
+    # Với mỗi item, bóc placeholder (kể cả thẻ HTML như <br>) thành __PH_n__ dùng chung
+    # cho original & translated để AI không xóa/thay đổi thẻ. Lưu lại danh sách placeholder
+    # theo index để khôi phục sau.
+    items_dicts: List[Dict[str, str]] = []
+    placeholders_map: Dict[int, List[str]] = {}
+    for item in body.items:
+        phs: List[str] = []
+
+        def _repl(m: re.Match) -> str:
+            phs.append(m.group(0))
+            return f"__PH_{len(phs) - 1}__"
+
+        original_ai = _RE_PLACEHOLDER.sub(_repl, item.original)
+        translated_ai = _RE_PLACEHOLDER.sub(_repl, item.translated)
+        items_dicts.append(
+            {"index": item.index, "original": original_ai, "translated": translated_ai}
+        )
+        placeholders_map[item.index] = phs
     try:
         results = await proofread_with_ai_batch(
             db,
@@ -1261,26 +1328,34 @@ async def proofread_batch_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Hiệu đính batch AI thất bại: {getattr(e, 'message', str(e))}")
+
+    # Khôi phục placeholder cho từng dòng và lưu cache nếu thay đổi
+    safe_results: List[ProofreadBatchResultItem] = []
     items_by_index = {item["index"]: item for item in items_dicts}
     for r in results:
-        orig_item = items_by_index.get(r["index"])
-        if not orig_item or not r.get("proofread"):
+        idx = r.get("index")
+        orig_item = items_by_index.get(idx)
+        if not orig_item:
             continue
+        raw_proof = (r.get("proofread") or "").strip()
+        phs = placeholders_map.get(idx, [])
+        restored = _restore_placeholders(raw_proof, phs).strip()
+        if not restored:
+            restored = (orig_item.get("translated") or "").strip()
         # Chỉ ghi cache khi hiệu đính ra nội dung khác với bản cũ; không đổi thì không ghi đè nguồn
         old_translated = (orig_item.get("translated") or "").strip()
-        new_proofread = (r["proofread"] or "").strip()
-        if new_proofread != old_translated:
+        if restored and (restored != old_translated):
             try:
                 await save_translation_to_cache(
-                    db, (orig_item.get("original") or "").strip(), new_proofread,
+                    db, (orig_item.get("original") or "").strip(), restored,
                     body.source_lang.strip(), body.target_lang.strip(),
                     origin="proofread",
                 )
             except Exception:
                 pass
-    return ProofreadBatchResponse(
-        results=[ProofreadBatchResultItem(index=r["index"], proofread=r["proofread"]) for r in results]
-    )
+        safe_results.append(ProofreadBatchResultItem(index=idx, proofread=restored))
+
+    return ProofreadBatchResponse(results=safe_results)
 
 
 @router.post("/export-file")

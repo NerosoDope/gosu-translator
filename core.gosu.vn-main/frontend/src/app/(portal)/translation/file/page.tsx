@@ -226,8 +226,7 @@ export default function TranslationFilePage() {
 
       const prompts = (pRes?.data ?? []).map((p: any) => ({ id: p.id, name: p.name, is_default: p.is_default }));
       setPromptOptions(prompts);
-      const defaultPrompt = prompts.find((p: any) => p.is_default);
-      if (defaultPrompt) setPromptId(defaultPrompt.id);
+      // Luôn mặc định chọn "Prompt mặc định" (không set promptId => backend dùng DEFAULT_SYSTEM_PROMPT)
     }).finally(() => {
       if (mounted) setLoadingConfig(false);
     });
@@ -792,7 +791,7 @@ export default function TranslationFilePage() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dịch File</h1>
       </div>
       <p className="text-sm text-gray-600 dark:text-gray-400">
-        Tải lên và dịch file với nhiều định dạng (Excel, CSV, JSON, XML)
+        Tải lên và dịch file với nhiều định dạng (Excel, CSV, JSON, XML, DOCX)
       </p>
 
       {/* Stepper: màu theo tiến trình - đã qua (xanh lá), hiện tại (xanh dương), chưa tới (xám) */}
@@ -1238,7 +1237,20 @@ export default function TranslationFilePage() {
                     setStep(5);
                     toast.success('Dịch file hoàn tất.');
                     if (translateJobIdRef.current != null) {
-                      try { await jobAPI.update(translateJobIdRef.current, { status: 'completed', progress: 100, result: { total_rows: (done.rows ?? []).length, saved_at: new Date().toISOString() } }); } catch { /* noop */ }
+                      try {
+                        await jobAPI.update(translateJobIdRef.current, {
+                          status: 'completed',
+                          progress: 100,
+                          result: {
+                            total_rows: (done.rows ?? []).length,
+                            saved_at: new Date().toISOString(),
+                            translated_json: done.translated_json ?? null,
+                            output_columns: done.columns ?? null,
+                            rows: done.rows ?? null,
+                            filename: file?.name ?? null,
+                          },
+                        });
+                      } catch { /* noop */ }
                       translateJobIdRef.current = null;
                     }
                   } catch (err: any) {
@@ -1398,7 +1410,21 @@ export default function TranslationFilePage() {
                   setStep(5);
                   toast.success('Dịch file hoàn tất.');
                   if (translateJobIdRef.current != null) {
-                    try { await jobAPI.update(translateJobIdRef.current, { status: 'completed', progress: 100, result: { total_rows: doneRows.length, saved_at: new Date().toISOString() } }); } catch { /* noop */ }
+                    try {
+                      await jobAPI.update(translateJobIdRef.current, {
+                        status: 'completed',
+                        progress: 100,
+                        result: {
+                          total_rows: doneRows.length,
+                          saved_at: new Date().toISOString(),
+                          translated_docx_b64: done.translated_docx_b64 ?? null,
+                          translated_json: done.translated_json ?? null,
+                          output_columns: done.columns ?? null,
+                          rows: done.rows ?? null,
+                          filename: file?.name ?? null,
+                        },
+                      });
+                    } catch { /* noop */ }
                     translateJobIdRef.current = null;
                   }
                 } catch (err: any) {
@@ -1464,38 +1490,6 @@ export default function TranslationFilePage() {
               <span>Đang gọi AI (Gemini)...</span>
             </div>
           )}
-
-          {/* Progress bar — chung: tree = indeterminate, bảng = % thực */}
-          <div>
-            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-              <span>
-                {isTreeFile
-                  ? (isJsonFile ? 'Đang xử lý JSON' : 'Đang xử lý XML')
-                  : progress
-                    ? `Batch ${progress.batch_done}/${progress.batch_total} · ${progress.done}/${progress.total} segment`
-                    : 'Khởi tạo...'}
-              </span>
-              <span className="font-medium text-gray-700 dark:text-gray-300">
-                {isTreeFile ? '…' : (progress ? `${progress.percent}%` : '0%')}
-              </span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
-              {isTreeFile ? (
-                <div
-                  className="h-3 w-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 animate-pulse"
-                  style={{ background: 'linear-gradient(90deg, #3b82f6 0%, #6366f1 100%)' }}
-                />
-              ) : (
-                <div
-                  className="h-3 rounded-full transition-all duration-500 ease-out"
-                  style={{
-                    width: `${progress ? progress.percent : 0}%`,
-                    background: 'linear-gradient(90deg, #3b82f6 0%, #6366f1 100%)',
-                  }}
-                />
-              )}
-            </div>
-          </div>
 
           <p className="text-xs text-gray-400 dark:text-gray-500">
             {isTreeFile

@@ -154,15 +154,14 @@ async def _cache_ttl_cleanup_loop():
 async def startup_event():
     """
     Startup event handler - Xử lý khi application khởi động
-    
+
     Log thông tin về environment và debug mode khi app start.
     Tự động seed permissions và gán cho ADMIN role.
     """
     import asyncio
 
     logger.info("GOSU Core Platform API starting...")
-    logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"Debug mode: {settings.DEBUG}")
+    logger.info("Environment: %s | Debug: %s", settings.ENVIRONMENT, settings.DEBUG)
     
     # Tự động seed permissions và gán cho ADMIN role
     from app.core.startup import seed_permissions_on_startup
@@ -176,3 +175,4 @@ async def startup_event():
     from app.modules.job.worker import job_worker_loop
     asyncio.create_task(job_worker_loop())
     logger.info("[Worker] Job priority worker đã được khởi động.")
+    logger.info("Backend ready. API: http://0.0.0.0:8000")
