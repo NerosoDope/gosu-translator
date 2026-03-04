@@ -20,7 +20,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
-import { useRouter } from 'next/navigation';
 
 // Components
 import DataTable, { Column } from '@/components/data/DataTable';
@@ -28,6 +27,7 @@ import Pagination from '@/components/data/Pagination';
 import FilterBar from '@/components/data/FilterBar';
 import Button from '@/components/ui/Button';
 import JobForm from '@/components/job/JobForm';
+import ProofreadJobModal from '@/components/job/ProofreadJobModal';
 
 // API
 import { jobAPI } from '@/lib/api';
@@ -127,11 +127,11 @@ function getJobSourceLabel(job: Job): string {
 
 function JobPageContent() {
   const toast = useToastContext();
-  const router = useRouter();
 
   // State management
   const [editingJob, setEditingJob] = useState<Job | undefined>(undefined);
   const [downloadingJobId, setDownloadingJobId] = useState<number | null>(null);
+  const [proofreadJob, setProofreadJob] = useState<Job | null>(null);
   const [showJobForm, setShowJobForm] = useState(false);
 
   // Confirmation modal state
@@ -332,8 +332,20 @@ function JobPageContent() {
     }
   };
 
-  const handleProofread = (job: Job) => {
-    router.push('/translation/proofread');
+  const handleProofread = async (job: Job) => {
+    try {
+      const res = await jobAPI.get(job.id);
+      const data = res.data as Job;
+      const result = data?.result as Record<string, unknown> | undefined;
+      const hasRows = Array.isArray(result?.rows) && result.rows.length > 0;
+      if (!hasRows) {
+        toast.warning('Job này chưa lưu dữ liệu để hiệu đính. Chỉ job dịch file đã hoàn thành (có lưu kết quả) mới mở được bảng hiệu đính.');
+        return;
+      }
+      setProofreadJob(data);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? 'Không thể tải chi tiết job.');
+    }
   };
 
   const handleDownload = async (job: Job) => {
@@ -1005,7 +1017,7 @@ function JobPageContent() {
                 <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
                   <button
                     type="button"
-                    onClick={() => { handleProofread(viewingJob); setViewingJob(null); }}
+                    onClick={() => { setViewingJob(null); handleProofread(viewingJob); }}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1028,6 +1040,12 @@ function JobPageContent() {
           </div>
         </div>
       )}
+
+      <ProofreadJobModal
+        open={!!proofreadJob}
+        onClose={() => setProofreadJob(null)}
+        job={proofreadJob}
+      />
     </div>
   );
 }

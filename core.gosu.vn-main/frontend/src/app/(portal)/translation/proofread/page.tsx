@@ -621,7 +621,7 @@ export default function ProofreadFilePage() {
             )}
           </div>
 
-          {/* ── Toolbar row ───────────────────────────────────────────────── */}
+          {/* ── Hàng 1: Tìm kiếm ─────────────────────────────────────────── */}
           <div className="flex flex-wrap items-center gap-2 px-5 py-3 border-b border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
             <div className="relative">
               <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -631,7 +631,7 @@ export default function ProofreadFilePage() {
             </div>
           </div>
 
-          {/* ── Find & Replace row ────────────────────────────────────────── */}
+          {/* ── Hàng 2: Find/Replace + AI Hiệu Đính (bên phải) ─────────────── */}
           <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-gray-100 dark:border-gray-700">
             <div className="flex flex-wrap items-center gap-2">
               <input

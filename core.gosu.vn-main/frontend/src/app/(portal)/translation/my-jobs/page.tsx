@@ -2,12 +2,12 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
-import { useRouter } from 'next/navigation';
 import { authStore } from '@/lib/auth';
 import DataTable, { Column } from '@/components/data/DataTable';
 import Pagination from '@/components/data/Pagination';
 import FilterBar from '@/components/data/FilterBar';
 import JobForm from '@/components/job/JobForm';
+import ProofreadJobModal from '@/components/job/ProofreadJobModal';
 import { jobAPI } from '@/lib/api';
 import { useToastContext } from '@/context/ToastContext';
 
@@ -93,9 +93,9 @@ function getJobSourceLabel(job: Job): string {
 
 function MyJobsPage() {
   const toast = useToastContext();
-  const router = useRouter();
   const [userId, setUserId] = useState<number | null>(null);
   const [downloadingJobId, setDownloadingJobId] = useState<number | null>(null);
+  const [proofreadJob, setProofreadJob] = useState<Job | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -208,8 +208,20 @@ function MyJobsPage() {
     }
   };
 
-  const handleProofread = (job: Job) => {
-    router.push('/translation/proofread');
+  const handleProofread = async (job: Job) => {
+    try {
+      const res = await jobAPI.get(job.id);
+      const data = res.data as Job;
+      const result = data?.result as Record<string, unknown> | undefined;
+      const hasRows = Array.isArray(result?.rows) && result.rows.length > 0;
+      if (!hasRows) {
+        toast.warning('Job này chưa lưu dữ liệu để hiệu đính. Chỉ job dịch file đã hoàn thành (có lưu kết quả) mới mở được bảng hiệu đính.');
+        return;
+      }
+      setProofreadJob(data);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? 'Không thể tải chi tiết job.');
+    }
   };
 
   const handleDownload = async (job: Job) => {
@@ -795,6 +807,12 @@ function MyJobsPage() {
           </div>
         </div>
       )}
+
+      <ProofreadJobModal
+        open={!!proofreadJob}
+        onClose={() => setProofreadJob(null)}
+        job={proofreadJob}
+      />
     </div>
   );
 }
