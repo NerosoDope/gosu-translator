@@ -5,6 +5,7 @@ import Button from '@/components/ui/Button';
 import { useToastContext } from '@/context/ToastContext';
 import { proofreadAPI, translateAPI, languageAPI, jobAPI } from '@/lib/api';
 import { authStore } from '@/lib/auth';
+import { generateJobCode, JOB_CODE_PREFIX } from '@/lib/jobCode';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -302,7 +303,7 @@ export default function ProofreadFilePage() {
     }
     setSaveToJobLoading(true);
     try {
-      const jobCode = `PROOFREAD-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const jobCode = generateJobCode(JOB_CODE_PREFIX.PROOFREAD);
       const payload = {
         source_type: 'proofread',
         rows: rows.map((r) => ({ id: r.id, original: r.original, translated: r.translated, status: r.status })),

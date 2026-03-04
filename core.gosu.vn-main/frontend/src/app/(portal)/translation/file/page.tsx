@@ -8,6 +8,7 @@ import type { QualityCheckResult } from '@/lib/api';
 import { authStore } from '@/lib/auth';
 import type { TranslateStreamProgressEvent } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
+import { generateJobCode, JOB_CODE_PREFIX } from '@/lib/jobCode';
 
 // ── Step-5 Proofread types ────────────────────────────────────────────────────
 type S5Status = 'original' | 'edited' | 'ai-proofread' | 'loading';
@@ -578,7 +579,7 @@ export default function TranslationFilePage() {
     try {
       const user = await authStore.getCurrentUser();
       if (!user?.id) { toast.error('Vui lòng đăng nhập để lưu vào Jobs.'); return; }
-      const jobCode = `${jobType.toUpperCase()}-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const jobCode = generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE);
       await jobAPI.create({
         job_code: jobCode,
         job_type: jobType,
@@ -1194,7 +1195,7 @@ export default function TranslationFilePage() {
                     const user = await authStore.getCurrentUser();
                     if (user?.id) {
                       const jobRes = await jobAPI.create({
-                        job_code: `TRANSLATE-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                        job_code: generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE),
                         job_type: 'translation',
                         status: 'in_progress',
                         progress: 0,
@@ -1276,7 +1277,7 @@ export default function TranslationFilePage() {
                     const user = await authStore.getCurrentUser();
                     if (user?.id) {
                       const jobRes = await jobAPI.create({
-                        job_code: `TRANSLATE-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                        job_code: generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE),
                         job_type: 'translation',
                         status: 'in_progress',
                         progress: 0,
@@ -1357,7 +1358,7 @@ export default function TranslationFilePage() {
                   const user = await authStore.getCurrentUser();
                   if (user?.id) {
                     const jobRes = await jobAPI.create({
-                      job_code: `TRANSLATE-FILE-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                      job_code: generateJobCode(JOB_CODE_PREFIX.TRANSLATE_FILE),
                       job_type: 'translation',
                       status: 'in_progress',
                       progress: 0,

@@ -7,6 +7,7 @@ import type { QualityCheckResult } from '@/lib/api';
 import { getLanguageNameVi } from '@/lib/languageNamesVi';
 import { useToastContext } from '@/context/ToastContext';
 import { authStore } from '@/lib/auth';
+import { generateJobCode, JOB_CODE_PREFIX } from '@/lib/jobCode';
 
 const MAX_CHARS = 5000;
 
@@ -199,7 +200,7 @@ export default function TranslateDemoPage() {
     setQualityResult(null);
     setQualityExpanded(false);
 
-    const jobCode = `DIRECT-${Date.now()}`;
+    const jobCode = generateJobCode(JOB_CODE_PREFIX.TRANSLATE_DIRECT);
     const payload = {
       source_type: 'direct',
       text: content,
