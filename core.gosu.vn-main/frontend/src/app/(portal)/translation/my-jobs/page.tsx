@@ -2,13 +2,13 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
-import { useRouter } from 'next/navigation';
 import { authStore } from '@/lib/auth';
 import DataTable, { Column } from '@/components/data/DataTable';
 import Pagination from '@/components/data/Pagination';
 import FilterBar from '@/components/data/FilterBar';
 import JobForm from '@/components/job/JobForm';
-import { jobAPI } from '@/lib/api';
+import ProofreadJobModal from '@/components/job/ProofreadJobModal';
+import { jobAPI, translateAPI } from '@/lib/api';
 import { useToastContext } from '@/context/ToastContext';
 
 const queryClient = new QueryClient();
@@ -93,9 +93,9 @@ function getJobSourceLabel(job: Job): string {
 
 function MyJobsPage() {
   const toast = useToastContext();
-  const router = useRouter();
   const [userId, setUserId] = useState<number | null>(null);
   const [downloadingJobId, setDownloadingJobId] = useState<number | null>(null);
+  const [proofreadJob, setProofreadJob] = useState<Job | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -208,8 +208,20 @@ function MyJobsPage() {
     }
   };
 
-  const handleProofread = (job: Job) => {
-    router.push('/translation/proofread');
+  const handleProofread = async (job: Job) => {
+    try {
+      const res = await jobAPI.get(job.id);
+      const data = res.data as Job;
+      const result = data?.result as Record<string, unknown> | undefined;
+      const hasRows = Array.isArray(result?.rows) && result.rows.length > 0;
+      if (!hasRows) {
+        toast.warning('Job này chưa lưu dữ liệu để hiệu đính. Chỉ job dịch file đã hoàn thành (có lưu kết quả) mới mở được bảng hiệu đính.');
+        return;
+      }
+      setProofreadJob(data);
+    } catch (e: any) {
+      toast.error(e?.response?.data?.detail ?? 'Không thể tải chi tiết job.');
+    }
   };
 
   const handleDownload = async (job: Job) => {
@@ -248,6 +260,33 @@ function MyJobsPage() {
       }
       if (Array.isArray(result.rows) && result.rows.length > 0) {
         const columns = (result.output_columns as string[]) || Object.keys((result.rows[0] as Record<string, unknown>) || {});
+        const ext = (filename || '').toLowerCase().match(/\.(xlsx|xls|csv)$/)?.[1] || 'xlsx';
+        const format = ext === 'csv' ? 'csv' : 'xlsx';
+        if (format === 'xlsx') {
+          const rowsAsStrings = (result.rows as Record<string, unknown>[]).map((row) => {
+            const out: Record<string, string> = {};
+            for (const c of columns) {
+              const v = row[c];
+              out[c] = v == null ? '' : String(v);
+            }
+            return out;
+          });
+          const res = await translateAPI.exportFile({
+            columns,
+            rows: rowsAsStrings,
+            format: 'xlsx',
+            filename: baseName,
+          });
+          const blob = new Blob([res.data as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${baseName}_translated.xlsx`;
+          a.click();
+          URL.revokeObjectURL(url);
+          toast.success('Đã tải file (định dạng gốc).');
+          return;
+        }
         const header = columns.join(',');
         const csvRows = (result.rows as Record<string, unknown>[]).map((row) =>
           columns.map((c) => {
@@ -541,9 +580,9 @@ function MyJobsPage() {
       {/* View Job Detail Modal */}
       {viewingJob && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col">
+            {/* Header — sticky để luôn thấy nút đóng khi cuộn */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700 shrink-0 sticky top-0 z-10 bg-white dark:bg-gray-800 rounded-t-xl">
               <div>
                 <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{viewingJob.job_code}</h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">ID: #{viewingJob.id}</p>
@@ -551,12 +590,13 @@ function MyJobsPage() {
               <button
                 onClick={() => setViewingJob(null)}
                 className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+                aria-label="Đóng"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
 
-            <div className="p-6 space-y-5 text-sm">
+            <div className="p-6 space-y-5 text-sm overflow-y-auto min-h-0">
               {/* Trạng thái + Tiến độ */}
               <div className="flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-lg">
                 <div className="flex flex-col gap-1">
@@ -658,30 +698,32 @@ function MyJobsPage() {
                 </div>
               )}
 
-              {isFileTranslationJob(viewingJob) && viewingJob.status === 'completed' && (
-                <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-                  <button
-                    type="button"
-                    onClick={() => { handleProofread(viewingJob); setViewingJob(null); }}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    Hiệu đính
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDownload(viewingJob)}
-                    disabled={downloadingJobId === viewingJob.id}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <svg className={`w-4 h-4 ${downloadingJobId === viewingJob.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                    Tải xuống file đã dịch
-                  </button>
-                </div>
-              )}
             </div>
+
+            {/* Footer — Hiệu đính / Tải xuống (chỉ job dịch file hoàn thành), căn phải */}
+            {isFileTranslationJob(viewingJob) && viewingJob.status === 'completed' && (
+              <div className="shrink-0 p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 rounded-b-xl flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => { handleProofread(viewingJob); setViewingJob(null); }}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Hiệu đính
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDownload(viewingJob)}
+                  disabled={downloadingJobId === viewingJob.id}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg className={`w-4 h-4 ${downloadingJobId === viewingJob.id ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                  Tải xuống file đã dịch
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -795,6 +837,12 @@ function MyJobsPage() {
           </div>
         </div>
       )}
+
+      <ProofreadJobModal
+        open={!!proofreadJob}
+        onClose={() => setProofreadJob(null)}
+        job={proofreadJob}
+      />
     </div>
   );
 }

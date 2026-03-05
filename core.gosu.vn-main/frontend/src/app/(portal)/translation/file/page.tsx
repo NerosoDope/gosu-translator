@@ -2790,7 +2790,7 @@ export default function TranslationFilePage() {
             </div>
           </div>
 
-          {/* ── Toolbar ── */}
+          {/* ── Hàng 1: Tìm kiếm (Tải XLSX/CSV nếu có thì thêm vào đây) ── */}
           <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <div className="relative">
               <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2800,7 +2800,7 @@ export default function TranslationFilePage() {
             </div>
           </div>
 
-          {/* ── Find & Replace ── */}
+          {/* ── Hàng 2: Find/Replace + AI Hiệu Đính (bên phải) ── */}
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <div className="flex flex-wrap items-center gap-2">
               <input type="text" placeholder="Nội dung cần thay thế…" value={s5FindText} onChange={(e) => setS5FindText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && s5Replace()} className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white min-w-[140px] max-w-xs" />
